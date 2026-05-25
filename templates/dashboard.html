@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Smart Door · Dashboard</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="{{ url_for('static', filename='chart.min.js') }}"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">🚪 <span>Smart Door</span></div>
+    <div class="topbar-right">
+      <span class="status"><span class="dot"></span> online</span>
+      <a class="btn-ghost" href="{{ url_for('dashboard.logout') }}">Logout</a>
+    </div>
+  </header>
+
+  {% if request.args.get('msg') %}
+  <div class="toast">{{ request.args.get('msg') }}</div>
+  {% endif %}
+
+  <main class="wrap">
+    <!-- stat cards -->
+    <section class="cards">
+      <div class="card stat"><div class="stat-label">Granted today</div><div class="stat-value ok" id="s-granted">–</div></div>
+      <div class="card stat"><div class="stat-label">Denied today</div><div class="stat-value bad" id="s-denied">–</div></div>
+      <div class="card stat"><div class="stat-label">Last seen</div><div class="stat-value" id="s-last">–</div></div>
+      <div class="card owner">
+        <div class="stat-label">Enrolled owner</div>
+        <img id="owner-img" src="{{ url_for('dashboard.owner_photo') }}?t=0" alt="owner">
+        <form class="owner-form" method="post" action="{{ url_for('dashboard.owner_upload') }}" enctype="multipart/form-data">
+          <input type="file" name="photo" accept="image/*" required>
+          <button type="submit">Re-enroll</button>
+        </form>
+      </div>
+    </section>
+
+    <section class="grid-2">
+      <div class="card">
+        <div class="card-title">Live camera</div>
+        <img class="live" src="/annotated_stream" alt="live camera">
+        <p class="legend"><span class="lg ok"></span>match <span class="lg bad"></span>no match <span class="lg warn"></span>no face</p>
+      </div>
+      <div class="card">
+        <div class="card-title">Access over time
+          <select id="range">
+            <option value="7">7 days</option>
+            <option value="14">14 days</option>
+            <option value="30">30 days</option>
+          </select>
+        </div>
+        <canvas id="chart" height="200"></canvas>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-title">Recent events
+        <select id="filter">
+          <option value="">all</option>
+          <option value="granted">granted</option>
+          <option value="denied">denied</option>
+        </select>
+      </div>
+      <table class="events">
+        <thead><tr><th></th><th>Time</th><th>Verdict</th><th>Distance</th></tr></thead>
+        <tbody id="events-body"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    const fmtTime = ts => ts ? new Date(ts * 1000).toLocaleString() : "—";
+    let chart;
+
+    async function refreshStats() {
+      const days = document.getElementById('range').value;
+      const s = await (await fetch(`/api/stats?days=${days}`)).json();
+      document.getElementById('s-granted').textContent = s.granted_today;
+      document.getElementById('s-denied').textContent = s.denied_today;
+      document.getElementById('s-last').textContent =
+        s.last_seen ? new Date(s.last_seen * 1000).toLocaleTimeString() : "—";
+      drawChart(s.series);
+    }
+
+    function drawChart(series) {
+      const data = {
+        labels: series.labels.map(d => d.slice(5)),
+        datasets: [
+          { label: 'Granted', data: series.granted, backgroundColor: '#22c55e' },
+          { label: 'Denied',  data: series.denied,  backgroundColor: '#ef4444' },
+        ]
+      };
+      if (chart) { chart.data = data; chart.update(); return; }
+      chart = new Chart(document.getElementById('chart'), {
+        type: 'bar',
+        data,
+        options: {
+          responsive: true,
+          scales: { x: { stacked: true, grid: { color: '#222' }, ticks: { color: '#999' } },
+                    y: { stacked: true, grid: { color: '#222' }, ticks: { color: '#999' }, beginAtZero: true } },
+          plugins: { legend: { labels: { color: '#ccc' } } }
+        }
+      });
+    }
+
+    async function refreshEvents() {
+      const verdict = document.getElementById('filter').value;
+      const rows = await (await fetch(`/api/events?limit=50&verdict=${verdict}`)).json();
+      const body = document.getElementById('events-body');
+      body.innerHTML = rows.map(r => `
+        <tr>
+          <td>${r.snapshot_path ? `<img class="thumb" src="/snapshots/${r.snapshot_path}">` : ''}</td>
+          <td>${fmtTime(r.ts)}</td>
+          <td><span class="badge ${r.verdict === 'granted' ? 'ok' : 'bad'}">${r.verdict}</span></td>
+          <td>${r.distance != null ? r.distance.toFixed(3) : '—'}</td>
+        </tr>`).join('') || `<tr><td colspan="4" class="muted">No events yet.</td></tr>`;
+    }
+
+    document.getElementById('range').onchange = refreshStats;
+    document.getElementById('filter').onchange = refreshEvents;
+    // Load once on page load. Reload the page to refresh stats/events.
+    refreshStats();
+    refreshEvents();
+  </script>
+</body>
+</html>

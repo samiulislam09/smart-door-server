@@ -8,7 +8,19 @@ The face-verification backend for a smart door lock. The door-side client is an
 ESP32-CAM (`~/Documents/Arduino/smart-door/smart-door.ino`): it captures a frame,
 POSTs the raw JPEG bytes to this server, and uses the response to drive a servo lock
 and a buzzer. `owner.jpg` is the enrolled reference face — replacing it re-enrolls the
-owner. The whole backend is `server.py` (one Flask app, one endpoint).
+owner.
+
+Modules:
+- `server.py` — core door API (`/verify`), the live camera viewer (`/view`,
+  `/annotated_stream`), face matching (`match_face`/`init_owner`), `reenroll_owner`,
+  and debounced event logging. Registers the dashboard blueprint.
+- `db.py` — MySQL access layer (PyMySQL): `events` table, `log_event`, `query_events`,
+  `stats`, `prune`. Loads `.env` on import. Snapshots saved under `snapshots/`.
+- `dashboard.py` — Flask blueprint: password login, `/dashboard`, JSON APIs
+  (`/api/events`, `/api/stats`), `/snapshots/<f>`, owner re-enroll (`/owner`).
+- `templates/` + `static/` — dashboard UI (dark theme, vendored Chart.js).
+- `.env` — MySQL creds + `DASHBOARD_PASSWORD` + `SECRET_KEY` (not committed; loaded by
+  `db._load_dotenv`).
 
 ## Architecture
 
@@ -45,6 +57,23 @@ handles `/verify` concurrently fine (~15fps measured). `match_face()` is shared 
 `/verify` and the recognizer (accepts a path or BGR numpy frame). `threaded=True` so
 the long-lived stream never blocks `/verify`.
 
+### Database + dashboard
+
+Access events are logged to **MySQL** (server at `/usr/local/mysql`, db `smartdoor`).
+After each `/verify`, `_maybe_log()` records `granted`/`denied` events only — `no_face`
+and `error` are skipped, and repeats of the same verdict within `LOG_DEBOUNCE_S` (10s)
+are suppressed (so one person standing there = one row, not seven). This is essential:
+the ESP posts ~every 1.5s, so logging everything would flood the DB. Each event saves
+the posted JPEG to `snapshots/<id>.jpg`; `prune()` (every 50th insert) caps retention to
+`MAX_EVENTS`/`MAX_AGE_DAYS`. Logging failures are swallowed so they never break the door.
+
+The dashboard (`/dashboard`, blueprint in `dashboard.py`) is password-gated
+(`DASHBOARD_PASSWORD`, default `admin`) via Flask session. It polls `/api/stats` and
+`/api/events` every 3s and embeds `/annotated_stream`. `/verify` stays open (the ESP has
+no login); `/view`, `/annotated_stream`, and all dashboard routes require login. Owner
+re-enroll (`/owner`) validates a face is present, overwrites `owner.jpg`, and calls
+`init_owner()` to re-cache live.
+
 Key behavior to keep in mind when changing the matching logic:
 - **Never re-encode the JPEG at default quality.** Writing the incoming bytes verbatim
   is deliberate: a default-quality Pillow re-encode (`img.save(...)` without `quality=`)
@@ -71,14 +100,21 @@ The runtime environment is the conda env **`smartdoor`** (Python 3.10, with
 this directory is empty/unused — ignore it. TensorFlow has no Intel-Mac + Python 3.11
 wheels, which is why a separate Python 3.10 conda env exists.
 
+MySQL must be running (`sudo /usr/local/mysql/support-files/mysql.server start`) and
+`.env` must hold the DB creds (`MYSQL_PASSWORD`, optionally `MYSQL_USER`/`MYSQL_DB`/...)
+plus `DASHBOARD_PASSWORD` and `SECRET_KEY`. `db._load_dotenv()` reads `.env` on import,
+so just run normally:
+
 ```bash
 conda activate smartdoor
 cd /Volumes/files/smart-door-system/server
-python server.py         # serves on 0.0.0.0:8080
+python server.py         # serves on 0.0.0.0:8080 (threaded)
 ```
 
-`deepface` downloads model weights to `~/.deepface` on first use, so the first
-`/verify` after a fresh start is slow.
+Dashboard: `http://127.0.0.1:8080/dashboard` (or the Mac's LAN IP). `deepface` downloads
+model weights to `~/.deepface` on first use, so the first `/verify` after a fresh start
+is slow. Set a real `DASHBOARD_PASSWORD` in `.env` (default is `admin`); `SECRET_KEY`
+unset means sessions reset on restart.
 
 Smoke test:
 

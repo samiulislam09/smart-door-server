@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Smart Door · Sign in</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="login-body">
+  <form class="login-card" method="post">
+    <div class="login-logo">🚪</div>
+    <h1>Smart Door</h1>
+    <p class="muted">Enter the dashboard password</p>
+    {% if error %}<div class="login-error">{{ error }}</div>{% endif %}
+    <input type="password" name="password" placeholder="Password" autofocus required>
+    <button type="submit">Sign in</button>
+  </form>
+</body>
+</html>

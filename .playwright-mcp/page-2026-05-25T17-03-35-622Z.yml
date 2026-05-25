@@ -1,0 +1,55 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - generic [ref=e3]: 🚪 Smart Door
+    - generic [ref=e4]:
+      - generic [ref=e5]: online
+      - link "Logout" [ref=e7] [cursor=pointer]:
+        - /url: /logout
+  - main [ref=e8]:
+    - generic [ref=e9]:
+      - generic [ref=e10]:
+        - generic [ref=e11]: Granted today
+        - generic [ref=e12]: "0"
+      - generic [ref=e13]:
+        - generic [ref=e14]: Denied today
+        - generic [ref=e15]: "0"
+      - generic [ref=e16]:
+        - generic [ref=e17]: Last seen
+        - generic [ref=e18]: —
+      - generic [ref=e19]:
+        - generic [ref=e20]: Enrolled owner
+        - img "owner" [ref=e21]
+        - generic [ref=e22]:
+          - button "Choose File" [ref=e23]
+          - button "Re-enroll" [ref=e24] [cursor=pointer]
+    - generic [ref=e25]:
+      - generic [ref=e26]:
+        - generic [ref=e27]: Live camera
+        - img "live camera" [ref=e28]
+        - paragraph [ref=e29]:
+          - text: match
+          - text: no match
+          - text: no face
+      - generic [ref=e34]:
+        - text: Access over time
+        - combobox [ref=e35] [cursor=pointer]:
+          - option "7 days" [selected]
+          - option "14 days"
+          - option "30 days"
+    - generic [ref=e37]:
+      - generic [ref=e38]:
+        - text: Recent events
+        - combobox [ref=e39] [cursor=pointer]:
+          - option "all" [selected]
+          - option "granted"
+          - option "denied"
+      - table [ref=e40]:
+        - rowgroup [ref=e41]:
+          - row "Time Verdict Distance" [ref=e42]:
+            - columnheader [ref=e43]
+            - columnheader "Time" [ref=e44]
+            - columnheader "Verdict" [ref=e45]
+            - columnheader "Distance" [ref=e46]
+        - rowgroup [ref=e47]:
+          - row "No events yet." [ref=e48]:
+            - cell "No events yet." [ref=e49]

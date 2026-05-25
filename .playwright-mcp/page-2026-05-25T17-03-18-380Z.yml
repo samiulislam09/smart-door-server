@@ -1,0 +1,6 @@
+- generic [ref=e2]:
+  - generic [ref=e3]: 🚪
+  - heading "Smart Door" [level=1] [ref=e4]
+  - paragraph [ref=e5]: Enter the dashboard password
+  - textbox "Password" [active] [ref=e6]
+  - button "Sign in" [ref=e7] [cursor=pointer]

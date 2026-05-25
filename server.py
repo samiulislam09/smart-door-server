@@ -1,11 +1,16 @@
 from flask import Flask, request, jsonify, Response
 from deepface import DeepFace
-import io, tempfile, os, time, threading, urllib.request
+import io, tempfile, os, time, threading, urllib.request, shutil
 import cv2
 import numpy as np
 from PIL import Image
 
+import db          # loads .env (MYSQL_*, DASHBOARD_PASSWORD, SECRET_KEY) on import
+import dashboard
+
 app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY") or os.urandom(24)
+app.register_blueprint(dashboard.bp)
 OWNER_IMG = "owner.jpg"
 
 # SFace is the fastest of the DeepFace models (~half VGG-Face's time at similar
@@ -82,6 +87,64 @@ def match_face(img):
     return reason, round(distance, 4), round(_THRESHOLD, 4)
 
 
+def reenroll_owner(jpeg_bytes):
+    """Validate an uploaded photo has a face, save it as owner.jpg, and re-cache the
+    embedding live. Returns (ok, message). Used by the dashboard."""
+    try:
+        img = Image.open(io.BytesIO(jpeg_bytes))
+        img.load()
+    except Exception as e:
+        return False, f"Not a valid image: {e}"
+    fd, tmp_path = tempfile.mkstemp(suffix='.jpg')
+    os.close(fd)
+    try:
+        if (img.format or "").upper() == "JPEG":
+            with open(tmp_path, "wb") as f:
+                f.write(jpeg_bytes)
+        else:
+            img.convert("RGB").save(tmp_path, format="JPEG", quality=95)
+        try:
+            _embed(tmp_path)  # confirm a face is detectable before enrolling
+        except Exception as e:
+            if _is_no_face(e):
+                return False, "No face detected in that photo."
+            return False, "Could not process that photo."
+        shutil.copyfile(tmp_path, OWNER_IMG)
+        init_owner()  # re-cache embedding immediately, no restart
+        return True, "Owner photo updated."
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+# Debounced, face-only event logging (the hot path posts ~every 1.5s, mostly no_face).
+_VERDICT_MAP = {"match": "granted", "no_match": "denied"}
+LOG_DEBOUNCE_S = 10.0
+_last_log = {"verdict": None, "ts": 0.0}
+_log_count = 0
+
+
+def _maybe_log(reason, distance, threshold, jpeg_bytes):
+    """Log granted/denied events only, skipping repeats within LOG_DEBOUNCE_S. Logging
+    failures never affect the door verdict."""
+    global _log_count
+    verdict = _VERDICT_MAP.get(reason)
+    if verdict is None:                       # no_face / error -> not logged
+        return
+    now = time.time()
+    if verdict == _last_log["verdict"] and now - _last_log["ts"] < LOG_DEBOUNCE_S:
+        return
+    _last_log["verdict"] = verdict
+    _last_log["ts"] = now
+    try:
+        db.log_event(verdict, distance, threshold, jpeg_bytes=jpeg_bytes)
+        _log_count += 1
+        if _log_count % 50 == 0:
+            db.prune()
+    except Exception as ex:
+        print("[log] failed (door unaffected):", ex)
+
+
 @app.route('/verify', methods=['POST'])
 def verify():
     # Validate the body is a real image; a bad/empty body is a client error, not a
@@ -108,6 +171,7 @@ def verify():
             img.convert("RGB").save(tmp_path, format="JPEG", quality=95)
 
         reason, distance, threshold = match_face(tmp_path)
+        _maybe_log(reason, distance, threshold, raw)
 
         if reason in ("match", "no_match"):
             return jsonify({"verified": reason == "match", "reason": reason,
@@ -229,6 +293,7 @@ def _annotated_stream(src):
 
 
 @app.route('/annotated_stream')
+@dashboard.login_required
 def annotated_stream():
     src = request.args.get("src", ESP_STREAM_URL)
     return Response(_annotated_stream(src),
@@ -236,6 +301,7 @@ def annotated_stream():
 
 
 @app.route('/view')
+@dashboard.login_required
 def view():
     src = request.args.get("src", ESP_STREAM_URL)
     return f"""<!doctype html><html><head><title>Door camera</title>
@@ -252,6 +318,7 @@ input{{width:360px}}</style></head><body>
 # Warm up the model and cache the owner embedding at import time so the first /verify
 # is fast (and so failures surface at startup, not on the first door check).
 init_owner()
+db.init_db()
 
 
 if __name__ == '__main__':

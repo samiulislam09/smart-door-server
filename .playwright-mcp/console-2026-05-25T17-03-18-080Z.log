@@ -1,0 +1,32 @@
+[     186ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "new-password"): (More info: https://goo.gl/9p2vKq) %o @ http://127.0.0.1:8080/login:0
+[     299ms] [ERROR] Failed to load resource: the server responded with a status of 404 (NOT FOUND) @ http://127.0.0.1:8080/favicon.ico:0
+[  688797ms] [ERROR] Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING @ http://127.0.0.1:8080/annotated_stream:0
+[  691216ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8080/api/stats?days=30:0
+[  691216ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8080/api/events?limit=50&verdict=denied:0
+[  691217ms] TypeError: Failed to fetch
+    at refreshStats (http://127.0.0.1:8080/dashboard:76:30)
+    at refreshAll (http://127.0.0.1:8080/dashboard:118:29)
+[  691217ms] TypeError: Failed to fetch
+    at refreshEvents (http://127.0.0.1:8080/dashboard:107:33)
+    at refreshAll (http://127.0.0.1:8080/dashboard:118:45)
+[  694215ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8080/api/stats?days=30:0
+[  694215ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8080/api/events?limit=50&verdict=denied:0
+[  694216ms] TypeError: Failed to fetch
+    at refreshStats (http://127.0.0.1:8080/dashboard:76:30)
+    at refreshAll (http://127.0.0.1:8080/dashboard:118:29)
+[  694216ms] TypeError: Failed to fetch
+    at refreshEvents (http://127.0.0.1:8080/dashboard:107:33)
+    at refreshAll (http://127.0.0.1:8080/dashboard:118:45)
+[  697226ms] Unexpected token '<', "<!doctype "... is not valid JSON
+[  697229ms] Unexpected token '<', "<!doctype "... is not valid JSON
+[  700223ms] Unexpected token '<', "<!doctype "... is not valid JSON
+[  700226ms] Unexpected token '<', "<!doctype "... is not valid JSON
+[  703221ms] Unexpected token '<', "<!doctype "... is not valid JSON
+[  703225ms] Unexpected token '<', "<!doctype "... is not valid JSON
+[  706221ms] Unexpected token '<', "<!doctype "... is not valid JSON
+[  706223ms] Unexpected token '<', "<!doctype "... is not valid JSON
+[  709222ms] Unexpected token '<', "<!doctype "... is not valid JSON
+[  709224ms] Unexpected token '<', "<!doctype "... is not valid JSON
+[  712222ms] Unexpected token '<', "<!doctype "... is not valid JSON
+[  712225ms] Unexpected token '<', "<!doctype "... is not valid JSON
+[  713564ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "new-password"): (More info: https://goo.gl/9p2vKq) %o @ http://127.0.0.1:8080/login:0
