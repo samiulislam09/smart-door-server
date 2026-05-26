@@ -18,7 +18,7 @@ Modules:
 - `matching.py` — pure, dependency-light helpers (`best_match`, `cosine_distance`,
   embedding (de)serialization, `validate_name`); unit-tested in `tests/`.
 - `db.py` — MySQL access layer (PyMySQL): `events` table, `log_event`, `query_events`,
-  `stats`, `prune`. Loads `.env` on import. Snapshots saved under `snapshots/`.
+  `stats`, `prune`. Loads `.env` on import. Snapshots saved under `assets/snapshots/`.
 - `dashboard.py` — Flask blueprint: password login, `/dashboard`, JSON APIs
   (`/api/events`, `/api/stats`, `/api/users`), `/snapshots/<f>`, user photo serving
   (`/user_photos/<id>`), and user management (`/users`, `/users/<id>/photos`,
@@ -70,7 +70,7 @@ After each `/verify`, `_maybe_log()` records `granted`/`denied` events only — 
 and `error` are skipped, and repeats of the same verdict within `LOG_DEBOUNCE_S` (10s)
 are suppressed (so one person standing there = one row, not seven). This is essential:
 the ESP posts ~every 1.5s, so logging everything would flood the DB. Each event saves
-the posted JPEG to `snapshots/<id>.jpg`; `prune()` (every 50th insert) caps retention to
+the posted JPEG to `assets/snapshots/<id>.jpg`; `prune()` (every 50th insert) caps retention to
 `MAX_EVENTS`/`MAX_AGE_DAYS`. Logging failures are swallowed so they never break the door.
 
 The dashboard (`/dashboard`, blueprint in `dashboard.py`) is password-gated

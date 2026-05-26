@@ -11,7 +11,7 @@ from pathlib import Path
 import pymysql
 
 _BASE = Path(__file__).resolve().parent
-SNAPSHOT_DIR = _BASE / "snapshots"
+SNAPSHOT_DIR = _BASE / "assets" / "snapshots"
 ASSETS_USERS_DIR = _BASE / "assets" / "users"
 
 # Retention: keep the newest MAX_EVENTS rows and drop anything older than MAX_AGE_DAYS.
@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS user_photos (
 
 def init_db():
     """Create dirs and tables if missing, and migrate the events table."""
-    SNAPSHOT_DIR.mkdir(exist_ok=True)
+    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
     ASSETS_USERS_DIR.mkdir(parents=True, exist_ok=True)
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(_DDL)
@@ -107,7 +107,7 @@ def _ensure_person_column(cur):
 
 
 def log_event(verdict, distance, threshold, person=None, jpeg_bytes=None):
-    """Insert one event; if jpeg_bytes given, save snapshots/<id>.jpg and record it.
+    """Insert one event; if jpeg_bytes given, save assets/snapshots/<id>.jpg and record it.
 
     `person` is the matched user's name (NULL for denied). Returns the new event id.
     """
