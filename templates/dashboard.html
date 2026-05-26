@@ -36,7 +36,8 @@
         <div class="user-head">
           <span class="user-name">{{ u.name }}</span>
           <form method="post" action="{{ url_for('dashboard.users_delete', uid=u.id) }}"
-                onsubmit="return confirm('Remove {{ u.name }} and all their photos?');">
+                data-name="{{ u.name }}"
+                onsubmit="return confirm('Remove ' + this.dataset.name + ' and all their photos?');">
             <button class="btn-del" type="submit">delete user</button>
           </form>
         </div>
@@ -106,6 +107,7 @@
 
   <script>
     const fmtTime = ts => ts ? new Date(ts * 1000).toLocaleString() : "—";
+    const esc = s => s == null ? '' : String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     let chart;
 
     async function refreshStats() {
@@ -148,7 +150,7 @@
           <td>${r.snapshot_path ? `<img class="thumb" src="/snapshots/${r.snapshot_path}">` : ''}</td>
           <td>${fmtTime(r.ts)}</td>
           <td><span class="badge ${r.verdict === 'granted' ? 'ok' : 'bad'}">${r.verdict}</span></td>
-          <td>${r.person || '—'}</td>
+          <td>${esc(r.person) || '—'}</td>
           <td>${r.distance != null ? r.distance.toFixed(3) : '—'}</td>
         </tr>`).join('') || `<tr><td colspan="5" class="muted">No events yet.</td></tr>`;
     }
