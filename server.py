@@ -7,6 +7,7 @@ from PIL import Image
 
 import db          # loads .env (MYSQL_*, DASHBOARD_PASSWORD, SECRET_KEY) on import
 import dashboard
+import matching
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY") or os.urandom(24)
@@ -23,9 +24,9 @@ DETECTOR = "opencv"  # fast (~30ms) Haar-based detector
 _env_threshold = os.environ.get("MATCH_THRESHOLD")
 MATCH_THRESHOLD = float(_env_threshold) if _env_threshold else None
 
-# Owner's face embedding is computed once at startup so each /verify only has to embed
-# the incoming frame, not re-process owner.jpg every call.
-_OWNER_EMBEDDING = None
+# Enrolled faces are cached at startup so each /verify only embeds the incoming frame.
+# _OWNERS is a list of (user_name, embedding_np); the closest one within _THRESHOLD wins.
+_OWNERS = []
 _THRESHOLD = None
 
 _FACE_CASCADE = cv2.CascadeClassifier(
@@ -55,89 +56,154 @@ def _embed(img):
     return np.asarray(reps[0]["embedding"], dtype=np.float32)
 
 
-def _cosine_distance(a, b):
-    return 1.0 - float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+def _capture_threshold():
+    """The cosine threshold for the active model (MATCH_THRESHOLD override wins)."""
+    if MATCH_THRESHOLD is not None:
+        return float(MATCH_THRESHOLD)
+    if os.path.exists(OWNER_IMG):
+        # Doubles as a model warm-up; preserves the previous boot threshold exactly.
+        res = DeepFace.verify(OWNER_IMG, OWNER_IMG, model_name=MODEL_NAME,
+                              detector_backend=DETECTOR, enforce_detection=False)
+        return float(res["threshold"])
+    from deepface.modules import verification as _v
+    return float(_v.find_threshold(MODEL_NAME, "cosine"))
 
 
-def init_owner():
-    """Build the model, capture its threshold, and cache the owner embedding."""
-    global _OWNER_EMBEDDING, _THRESHOLD
-    res = DeepFace.verify(OWNER_IMG, OWNER_IMG, model_name=MODEL_NAME,
-                          detector_backend=DETECTOR, enforce_detection=False)
-    _THRESHOLD = float(MATCH_THRESHOLD) if MATCH_THRESHOLD is not None \
-        else float(res["threshold"])
-    _OWNER_EMBEDDING = _embed(OWNER_IMG)
-    print(f"[init] model={MODEL_NAME} threshold={_THRESHOLD:.4f} owner embedding cached")
+def init_owners():
+    """Capture the model threshold and (re)load all enrolled embeddings from the DB.
+
+    Photos embedded under a different model are re-embedded from their on-disk image and
+    the DB row is updated, so changing FACE_MODEL self-heals on the next startup.
+    """
+    global _OWNERS, _THRESHOLD
+    _THRESHOLD = _capture_threshold()
+    owners = []
+    for row in db.all_photos():
+        if row["model_name"] == MODEL_NAME:
+            emb = matching.bytes_to_embedding(row["embedding"])
+        else:
+            path = str(db.ASSETS_USERS_DIR / row["image_path"])
+            emb = _embed(path)
+            db.update_embedding(row["id"], matching.embedding_to_bytes(emb), MODEL_NAME)
+        owners.append((row["name"], emb))
+    _OWNERS = owners
+    print(f"[init] model={MODEL_NAME} threshold={_THRESHOLD:.4f} owners={len(_OWNERS)}")
 
 
 def match_face(img):
-    """Compare img against the cached owner embedding. img = file path or BGR frame.
+    """Compare img against every enrolled embedding. img = file path or BGR frame.
 
-    Returns (reason, distance, threshold). distance/threshold are None when no face is
-    present or on error.
+    Returns (reason, distance, threshold, person). On a match, person is the matched
+    user's name. distance is the closest distance (None with no enrolled faces);
+    distance/threshold/person are all None for no_face/error.
     """
     try:
         emb = _embed(img)
     except Exception as e:
         if _is_no_face(e):
-            return "no_face", None, None
-        return "error", None, None
-    distance = _cosine_distance(_OWNER_EMBEDDING, emb)
-    reason = "match" if distance <= _THRESHOLD else "no_match"
-    return reason, round(distance, 4), round(_THRESHOLD, 4)
+            return "no_face", None, None, None
+        return "error", None, None, None
+    name, distance = matching.best_match(emb, _OWNERS, _THRESHOLD)
+    reason = "match" if name else "no_match"
+    dist = round(distance, 4) if distance is not None else None
+    return reason, dist, round(_THRESHOLD, 4), name
 
 
-def reenroll_owner(jpeg_bytes):
-    """Validate an uploaded photo has a face, save it as owner.jpg, and re-cache the
-    embedding live. Returns (ok, message). Used by the dashboard."""
+def _validate_face_and_embed(jpeg_bytes):
+    """Validate bytes are an image with a detectable face and embed it.
+
+    Returns (True, embedding_np, normalized_jpeg_bytes) or (False, error_message, None).
+    JPEG bytes are kept verbatim (a default-quality re-encode wrecks the embedding);
+    non-JPEG inputs are re-encoded at quality=95.
+    """
     try:
         img = Image.open(io.BytesIO(jpeg_bytes))
         img.load()
     except Exception as e:
-        return False, f"Not a valid image: {e}"
+        return False, f"Not a valid image: {e}", None
     fd, tmp_path = tempfile.mkstemp(suffix='.jpg')
     os.close(fd)
     try:
         if (img.format or "").upper() == "JPEG":
+            out_bytes = jpeg_bytes
             with open(tmp_path, "wb") as f:
                 f.write(jpeg_bytes)
         else:
             img.convert("RGB").save(tmp_path, format="JPEG", quality=95)
+            with open(tmp_path, "rb") as f:
+                out_bytes = f.read()
         try:
-            _embed(tmp_path)  # confirm a face is detectable before enrolling
+            emb = _embed(tmp_path)
         except Exception as e:
             if _is_no_face(e):
-                return False, "No face detected in that photo."
-            return False, "Could not process that photo."
-        shutil.copyfile(tmp_path, OWNER_IMG)
-        init_owner()  # re-cache embedding immediately, no restart
-        return True, "Owner photo updated."
+                return False, "No face detected in that photo.", None
+            return False, "Could not process that photo.", None
+        return True, emb, out_bytes
     finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
 
+def enroll_user(name_raw, jpeg_bytes):
+    """Create a new user from a name + first photo. Returns (ok, message)."""
+    ok, name = matching.validate_name(name_raw)
+    if not ok:
+        return False, name
+    ok, emb_or_msg, out_bytes = _validate_face_and_embed(jpeg_bytes)
+    if not ok:
+        return False, emb_or_msg
+    try:
+        user_id = db.create_user(name)
+    except Exception:
+        return False, f"A user named '{name}' already exists."
+    db.add_photo(user_id, out_bytes, matching.embedding_to_bytes(emb_or_msg), MODEL_NAME)
+    init_owners()
+    return True, f"Enrolled {name}."
+
+
+def add_user_photo(user_id, jpeg_bytes):
+    """Add another reference photo to an existing user. Returns (ok, message)."""
+    ok, emb_or_msg, out_bytes = _validate_face_and_embed(jpeg_bytes)
+    if not ok:
+        return False, emb_or_msg
+    db.add_photo(int(user_id), out_bytes,
+                 matching.embedding_to_bytes(emb_or_msg), MODEL_NAME)
+    init_owners()
+    return True, "Photo added."
+
+
+def _seed_owner_if_empty():
+    """First run: migrate the legacy owner.jpg into an 'Owner' user."""
+    if db.user_count() == 0 and os.path.exists(OWNER_IMG):
+        with open(OWNER_IMG, "rb") as f:
+            ok, msg = enroll_user("Owner", f.read())
+        print(f"[seed] {msg}")
+
+
 # Debounced, face-only event logging (the hot path posts ~every 1.5s, mostly no_face).
 _VERDICT_MAP = {"match": "granted", "no_match": "denied"}
 LOG_DEBOUNCE_S = 10.0
-_last_log = {"verdict": None, "ts": 0.0}
+_last_log = {"key": None, "ts": 0.0}
 _log_count = 0
 
 
-def _maybe_log(reason, distance, threshold, jpeg_bytes):
-    """Log granted/denied events only, skipping repeats within LOG_DEBOUNCE_S. Logging
+def _maybe_log(reason, distance, threshold, person, jpeg_bytes):
+    """Log granted/denied events only, skipping repeats of the same (verdict, person)
+    within LOG_DEBOUNCE_S so two different people in a row each log a row. Logging
     failures never affect the door verdict."""
     global _log_count
     verdict = _VERDICT_MAP.get(reason)
     if verdict is None:                       # no_face / error -> not logged
         return
     now = time.time()
-    if verdict == _last_log["verdict"] and now - _last_log["ts"] < LOG_DEBOUNCE_S:
+    key = (verdict, person)
+    if key == _last_log["key"] and now - _last_log["ts"] < LOG_DEBOUNCE_S:
         return
-    _last_log["verdict"] = verdict
+    _last_log["key"] = key
     _last_log["ts"] = now
     try:
-        db.log_event(verdict, distance, threshold, jpeg_bytes=jpeg_bytes)
+        db.log_event(verdict, distance, threshold, person=person, jpeg_bytes=jpeg_bytes)
         _log_count += 1
         if _log_count % 50 == 0:
             db.prune()
@@ -170,12 +236,15 @@ def verify():
         else:
             img.convert("RGB").save(tmp_path, format="JPEG", quality=95)
 
-        reason, distance, threshold = match_face(tmp_path)
-        _maybe_log(reason, distance, threshold, raw)
+        reason, distance, threshold, person = match_face(tmp_path)
+        _maybe_log(reason, distance, threshold, person, raw)
 
         if reason in ("match", "no_match"):
-            return jsonify({"verified": reason == "match", "reason": reason,
-                            "distance": distance, "threshold": threshold})
+            body = {"verified": reason == "match", "reason": reason,
+                    "distance": distance, "threshold": threshold}
+            if person:                       # string field; never a second boolean true
+                body["user"] = person
+            return jsonify(body)
         if reason == "no_face":
             return jsonify({"verified": False, "reason": "no_face"})
         return jsonify({"verified": False, "reason": "error",
@@ -202,7 +271,7 @@ _VERDICT_STYLE = {
 _view_lock = threading.Lock()
 _view_latest_frame = None       # most recent BGR frame seen by the viewer
 _view_frame_ts = 0.0            # when it was seen (recognizer skips stale frames)
-_view_verdict = ("warming", None, None)
+_view_verdict = ("warming", None, None, None)
 _recognizer_started = False
 
 
@@ -212,8 +281,10 @@ def _detect_faces(bgr):
                                            minNeighbors=5, minSize=(60, 60))
 
 
-def _draw(bgr, faces, reason, distance, threshold):
+def _draw(bgr, faces, reason, distance, threshold, person=None):
     color, label = _VERDICT_STYLE.get(reason, ((200, 200, 200), reason))
+    if person:
+        label = person                       # show who matched instead of "MATCH (owner)"
     for (x, y, w, h) in faces:
         cv2.rectangle(bgr, (x, y), (x + w, y + h), color, 2)
     if distance is not None:
@@ -275,8 +346,8 @@ def _annotated_stream(src):
             with _view_lock:
                 _view_latest_frame = frame
                 _view_frame_ts = time.time()
-            reason, distance, threshold = _view_verdict   # atomic tuple read
-            _draw(frame, _detect_faces(frame), reason, distance, threshold)
+            reason, distance, threshold, person = _view_verdict   # atomic tuple read
+            _draw(frame, _detect_faces(frame), reason, distance, threshold, person)
             ok, out = cv2.imencode(".jpg", frame)
             if not ok:
                 continue
@@ -315,10 +386,12 @@ input{{width:360px}}</style></head><body>
 </body></html>"""
 
 
-# Warm up the model and cache the owner embedding at import time so the first /verify
-# is fast (and so failures surface at startup, not on the first door check).
-init_owner()
+# At import: create tables, migrate the legacy owner.jpg into an "Owner" user on first
+# run, then cache all enrolled embeddings so the first /verify is fast and failures
+# surface at startup rather than on the first door check.
 db.init_db()
+_seed_owner_if_empty()
+init_owners()
 
 
 if __name__ == '__main__':
