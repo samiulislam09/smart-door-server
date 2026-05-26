@@ -101,11 +101,11 @@ def match_face(img):
     """
     try:
         emb = _embed(img)
+        name, distance = matching.best_match(emb, _OWNERS, _THRESHOLD)
     except Exception as e:
         if _is_no_face(e):
             return "no_face", None, None, None
         return "error", None, None, None
-    name, distance = matching.best_match(emb, _OWNERS, _THRESHOLD)
     reason = "match" if name else "no_match"
     dist = round(distance, 4) if distance is not None else None
     return reason, dist, round(_THRESHOLD, 4), name
@@ -382,7 +382,7 @@ img{{max-width:95vw;border:2px solid #333;margin-top:10px}}
 input{{width:360px}}</style></head><body>
 <h2>Smart Door &mdash; live verification</h2>
 <form method="get" action="/view"><input name="src" value="{src}"><button>load</button></form>
-<p>green box = owner matched &nbsp; red = not the owner &nbsp; yellow = no face</p>
+<p>green box = matched (name shown) &nbsp; red = no match &nbsp; yellow = no face</p>
 <img src="/annotated_stream?src={src}">
 </body></html>"""
 
