@@ -1,6 +1,13 @@
+import os
+# Pin BEFORE numpy/torch/TensorFlow load: on this Intel-Mac the numpy-MKL and torch OpenMP
+# thread pools conflict and segfault in the conv path used by Fasnet. Single-threaded math
+# eliminates the crash (verified). Must be set before the heavy imports below.
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+
 from flask import Flask, request, jsonify, Response
 from deepface import DeepFace
-import io, tempfile, os, time, threading, urllib.request
+import io, tempfile, time, threading, urllib.request
 import cv2
 import numpy as np
 from PIL import Image
@@ -24,6 +31,13 @@ DETECTOR = "opencv"  # fast (~30ms) Haar-based detector
 # Lower = stricter (a smaller distance is required to count as a match).
 _env_threshold = os.environ.get("MATCH_THRESHOLD")
 MATCH_THRESHOLD = float(_env_threshold) if _env_threshold else None
+
+# Anti-spoofing (liveness): reject a photo/screen of an enrolled face. Uses DeepFace's
+# Fasnet model (torch). ANTISPOOF toggles it; raise ANTISPOOF_MIN_SCORE to only block
+# confident spoofs if the low-res camera ever false-rejects a real person.
+ANTISPOOF = os.environ.get("ANTISPOOF", "1").lower() not in ("0", "false", "no", "off", "")
+_env_minscore = os.environ.get("ANTISPOOF_MIN_SCORE")
+ANTISPOOF_MIN_SCORE = float(_env_minscore) if _env_minscore else 0.0
 
 # Enrolled faces are cached at startup so each /verify only embeds the incoming frame.
 # _OWNERS is a list of (user_name, embedding_np); the closest one within _THRESHOLD wins.
@@ -55,6 +69,26 @@ def _embed(img):
     reps = DeepFace.represent(img, model_name=MODEL_NAME, detector_backend=DETECTOR,
                               enforce_detection=True)
     return np.asarray(reps[0]["embedding"], dtype=np.float32)
+
+
+def check_liveness(img):
+    """Liveness verdict for the first detected face. img = file path or BGR frame.
+
+    Returns (is_real, score), or (None, None) when anti-spoofing is disabled, no face is
+    present, or the check errors. Uses enforce_detection=True so an empty doorway raises
+    (no face) and is returned as (None, None) -> callers fall through to the normal no_face
+    path and the buzzer stays silent."""
+    if not ANTISPOOF:
+        return None, None
+    try:
+        faces = DeepFace.extract_faces(img, detector_backend=DETECTOR,
+                                       anti_spoofing=True, enforce_detection=True)
+    except Exception:
+        return None, None
+    if not faces:
+        return None, None
+    f = faces[0]
+    return f.get("is_real"), f.get("antispoof_score")
 
 
 
@@ -183,14 +217,14 @@ def _seed_owner_if_empty():
 
 
 # Debounced, face-only event logging (the hot path posts ~every 1.5s, mostly no_face).
-_VERDICT_MAP = {"match": "granted", "no_match": "denied"}
+_VERDICT_MAP = {"match": "granted", "no_match": "denied", "spoof": "spoof"}
 LOG_DEBOUNCE_S = 10.0
 _last_log = {"key": None, "ts": 0.0}
 _log_count = 0
 
 
-def _maybe_log(reason, distance, threshold, person, jpeg_bytes):
-    """Log granted/denied events only, skipping repeats of the same (verdict, person)
+def _maybe_log(reason, distance, threshold, person, jpeg_bytes, antispoof_score=None):
+    """Log granted/denied/spoof events only, skipping repeats of the same (verdict, person)
     within LOG_DEBOUNCE_S so two different people in a row each log a row. Logging
     failures never affect the door verdict."""
     global _log_count
@@ -204,7 +238,8 @@ def _maybe_log(reason, distance, threshold, person, jpeg_bytes):
     _last_log["key"] = key
     _last_log["ts"] = now
     try:
-        db.log_event(verdict, distance, threshold, person=person, jpeg_bytes=jpeg_bytes)
+        db.log_event(verdict, distance, threshold, person=person, jpeg_bytes=jpeg_bytes,
+                     antispoof_score=antispoof_score)
         _log_count += 1
         if _log_count % 50 == 0:
             db.prune()
@@ -237,6 +272,11 @@ def verify():
         else:
             img.convert("RGB").save(tmp_path, format="JPEG", quality=95)
 
+        is_real, antispoof_score = check_liveness(tmp_path)
+        if matching.is_spoof(is_real, antispoof_score, ANTISPOOF_MIN_SCORE):
+            _maybe_log("spoof", None, None, None, raw, antispoof_score=antispoof_score)
+            return jsonify({"verified": False, "reason": "spoof"})
+
         reason, distance, threshold, person = match_face(tmp_path)
         _maybe_log(reason, distance, threshold, person, raw)
 
@@ -260,11 +300,14 @@ def verify():
 # Recognition (SFace, ~0.28s) runs in a background thread so it never stalls the video;
 # the stream loop just draws the latest cached verdict on each frame.
 
+# Grayscale to match the black-and-white dashboard; verdicts are distinguished by the
+# label text drawn on the frame, not by hue. (B,G,R but equal channels = gray.)
 _VERDICT_STYLE = {
-    "match":    ((0, 200, 0),    "MATCH"),
-    "no_match": ((0, 0, 255),    "NO MATCH"),
-    "no_face":  ((0, 200, 255),  "no face"),
-    "error":    ((0, 200, 255),  "verify error"),
+    "match":    ((255, 255, 255), "MATCH"),
+    "no_match": ((150, 150, 150), "NO MATCH"),
+    "spoof":    ((130, 130, 130), "SPOOF"),
+    "no_face":  ((150, 150, 150), "no face"),
+    "error":    ((150, 150, 150), "verify error"),
     "warming":  ((200, 200, 200), "warming up..."),
 }
 
@@ -306,7 +349,11 @@ def _recognizer_loop():
             frame = _view_latest_frame.copy() if fresh else None
         if frame is None:
             continue
-        _view_verdict = match_face(frame)
+        is_real, score = check_liveness(frame)
+        if matching.is_spoof(is_real, score, ANTISPOOF_MIN_SCORE):
+            _view_verdict = ("spoof", None, None, None)
+        else:
+            _view_verdict = match_face(frame)
         time.sleep(0.4)  # cap recognition to a few per second
 
 
@@ -405,7 +452,7 @@ img{{max-width:95vw;border:2px solid #333;margin-top:10px}}
 input{{width:360px}}</style></head><body>
 <h2>Smart Door &mdash; live verification</h2>
 <form method="get" action="/view"><input name="src" value="{src}"><button>load</button></form>
-<p>green box = matched (name shown) &nbsp; red = no match &nbsp; yellow = no face</p>
+<p>box label: MATCH (name shown) / NO MATCH / SPOOF / no face &mdash; grayscale</p>
 <img src="/annotated_stream?src={src}">
 </body></html>"""
 
@@ -416,6 +463,10 @@ input{{width:360px}}</style></head><body>
 db.init_db()
 _seed_owner_if_empty()
 init_owners()
+if ANTISPOOF and os.path.exists(OWNER_IMG):
+    # warm the Fasnet model so the first door check isn't slowed by lazy loading
+    check_liveness(OWNER_IMG)
+    print("[init] anti-spoofing enabled (Fasnet warm)")
 
 
 if __name__ == '__main__':

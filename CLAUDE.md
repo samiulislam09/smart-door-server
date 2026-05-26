@@ -44,12 +44,13 @@ Response shape:
 ```json
 {"verified": true,  "reason": "match",    "user": "Alice", "distance": 0.31, "threshold": 0.593}
 {"verified": false, "reason": "no_match", "distance": 0.91, "threshold": 0.593}
+{"verified": false, "reason": "spoof"}
 {"verified": false, "reason": "no_face"}
 {"verified": false, "reason": "error", "error": "..."}
 ```
 
-The firmware maps these to actions: `match` → unlock, `no_match` → buzzer, `no_face` →
-stay silent (empty doorway), error/unreachable → idle.
+The firmware maps these to actions: `match` → unlock, `no_match`/`spoof` → buzzer,
+`no_face` → stay silent (empty doorway), error/unreachable → idle.
 
 `GET /view` (+ `/annotated_stream`) is a diagnostic viewer that proxies the ESP32's
 `:81` MJPEG stream (`ESP_STREAM_URL`, default `http://192.168.1.102:81/stream`,
@@ -66,9 +67,9 @@ the long-lived stream never blocks `/verify`.
 ### Database + dashboard
 
 Access events are logged to **MySQL** (server at `/usr/local/mysql`, db `smartdoor`).
-After each `/verify`, `_maybe_log()` records `granted`/`denied` events only — `no_face`
-and `error` are skipped, and repeats of the same verdict within `LOG_DEBOUNCE_S` (10s)
-are suppressed (so one person standing there = one row, not seven). This is essential:
+After each `/verify`, `_maybe_log()` records `granted`/`denied`/`spoof` events only —
+`no_face` and `error` are skipped, and repeats of the same `(verdict, person)` within
+`LOG_DEBOUNCE_S` (10s) are suppressed (so one person standing there = one row, not seven). This is essential:
 the ESP posts ~every 1.5s, so logging everything would flood the DB. Each event saves
 the posted JPEG to `assets/snapshots/<id>.jpg`; `prune()` (every 50th insert) caps retention to
 `MAX_EVENTS`/`MAX_AGE_DAYS`. Logging failures are swallowed so they never break the door.
@@ -100,6 +101,14 @@ Key behavior to keep in mind when changing the matching logic:
   manage them from the dashboard ("Users" card). A match returns the person's name in the
   `user` field and logs it to `events.person`. Model = SFace (fastest);
   override with `FACE_MODEL` env. Distance metric is cosine; threshold captured at boot.
+- **Anti-spoofing (liveness).** Before recognition, `/verify` (and the live viewer) run
+  DeepFace's Fasnet model via `check_liveness()`; a photo/screen of an enrolled face is
+  rejected as `reason:"spoof"` (firmware buzzes it) and logged to `events.antispoof_score`.
+  Toggle with `ANTISPOOF` (default on); raise `ANTISPOOF_MIN_SCORE` (default 0.0) to block
+  only confident spoofs if the camera ever false-rejects a real person. Requires `torch`.
+  **`OMP_NUM_THREADS=1`/`MKL_NUM_THREADS=1` are pinned at the very top of `server.py`** —
+  without this the numpy-MKL/torch OpenMP pools segfault in Fasnet's conv path. Enrollment
+  is NOT liveness-checked (uploading a still photo is intentional).
 - Only the literal `verified` field is ever `true` in the JSON — the firmware relies on
   a substring check, so don't add other boolean-`true` fields.
 - Optional `MATCH_THRESHOLD` env var tightens the match (lower = stricter); unset uses

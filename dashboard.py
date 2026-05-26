@@ -58,8 +58,9 @@ def home():
 @login_required
 def api_events():
     limit = min(int(request.args.get("limit", 50)), 200)
+    offset = max(0, int(request.args.get("offset", 0)))
     verdict = request.args.get("verdict") or None
-    return jsonify(db.query_events(limit=limit, verdict=verdict))
+    return jsonify(db.query_events(limit=limit, verdict=verdict, offset=offset))
 
 
 @bp.route("/api/stats")

@@ -55,3 +55,10 @@ def validate_name(raw):
     if len(name) > 64:
         return False, "Name must be 64 characters or fewer."
     return True, name
+
+
+def is_spoof(is_real, score, min_score):
+    """True when a frame should be rejected as a spoof: the model judged it fake AND is at
+    least `min_score` confident. min_score=0.0 trusts the model's decision; raising it blocks
+    only confident spoofs (fewer false-rejects of real people). Safe on None inputs."""
+    return (is_real is False) and (score is not None) and (score >= min_score)

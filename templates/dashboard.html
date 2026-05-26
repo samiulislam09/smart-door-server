@@ -9,7 +9,7 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">🚪 <span>Smart Door</span></div>
+    <div class="brand">▦ <span>Smart Door</span></div>
     <div class="topbar-right">
       <span class="status"><span class="dot"></span> online</span>
       <a class="btn-ghost" href="{{ url_for('dashboard.logout') }}">Logout</a>
@@ -21,11 +21,22 @@
   {% endif %}
 
   <main class="wrap">
-    <!-- stat cards -->
+    <!-- door-status hero -->
+    <section class="hero">
+      <div class="hero-ring" id="hero-ring">◷</div>
+      <div>
+        <div class="hero-label">Door status</div>
+        <div class="hero-state" id="hero-state">Loading…</div>
+      </div>
+      <div class="hero-time" id="hero-time"></div>
+    </section>
+
+    <!-- KPI strip -->
     <section class="cards">
-      <div class="card stat"><div class="stat-label">Granted today</div><div class="stat-value ok" id="s-granted">–</div></div>
-      <div class="card stat"><div class="stat-label">Denied today</div><div class="stat-value bad" id="s-denied">–</div></div>
-      <div class="card stat"><div class="stat-label">Last seen</div><div class="stat-value" id="s-last">–</div></div>
+      <div class="card stat"><div class="stat-label">✓ Granted today</div><div class="stat-value" id="s-granted">–</div></div>
+      <div class="card stat"><div class="stat-label">✕ Denied today</div><div class="stat-value" id="s-denied">–</div></div>
+      <div class="card stat"><div class="stat-label">⬡ Spoof today</div><div class="stat-value" id="s-spoof">–</div></div>
+      <div class="card stat"><div class="stat-label">◷ Last seen</div><div class="stat-value sm" id="s-last">–</div></div>
     </section>
 
     <section class="card users-card">
@@ -34,6 +45,11 @@
       {% for u in users %}
       <div class="user-row">
         <div class="user-head">
+          {% if u.photos %}
+          <img class="user-avatar" src="{{ url_for('dashboard.user_photo', pid=u.photos[0]) }}" alt="{{ u.name }}">
+          {% else %}
+          <span class="user-avatar" style="display:inline-flex;align-items:center;justify-content:center;color:var(--muted)">?</span>
+          {% endif %}
           <span class="user-name">{{ u.name }}</span>
           <form method="post" action="{{ url_for('dashboard.users_delete', uid=u.id) }}"
                 data-name="{{ u.name }}"
@@ -55,8 +71,10 @@
           <form class="add-photo" method="post"
                 action="{{ url_for('dashboard.users_add_photo', uid=u.id) }}"
                 enctype="multipart/form-data">
-            <input type="file" name="photo" accept="image/*" required>
-            <button type="submit">+ add photo</button>
+            <label class="file">
+              <input type="file" name="photo" accept="image/*" onchange="this.form.submit()">
+              <span class="file-btn">+ add photo</span>
+            </label>
           </form>
         </div>
       </div>
@@ -67,8 +85,13 @@
       <form class="add-user" method="post" action="{{ url_for('dashboard.users_create') }}"
             enctype="multipart/form-data">
         <input type="text" name="name" placeholder="Name" maxlength="64" required>
-        <input type="file" name="photo" accept="image/*" required>
-        <button type="submit">Add user</button>
+        <label class="file">
+          <input type="file" name="photo" accept="image/*" required
+                 onchange="this.closest('.file').querySelector('.file-name').textContent = this.files[0] ? this.files[0].name : ''">
+          <span class="file-btn">Choose photo</span>
+          <span class="file-name"></span>
+        </label>
+        <button class="btn-primary" type="submit">Add user</button>
       </form>
     </section>
 
@@ -76,7 +99,12 @@
       <div class="card">
         <div class="card-title">Live camera</div>
         <img class="live" src="/annotated_stream" alt="live camera">
-        <p class="legend"><span class="lg ok"></span>match <span class="lg bad"></span>no match <span class="lg warn"></span>no face</p>
+        <p class="legend">
+          <span><span class="lg match"></span>match</span>
+          <span><span class="lg nomatch"></span>no match</span>
+          <span><span class="lg spoof"></span>spoof</span>
+          <span><span class="lg noface"></span>no face</span>
+        </p>
       </div>
       <div class="card">
         <div class="card-title">Access over time
@@ -102,30 +130,62 @@
         <thead><tr><th></th><th>Time</th><th>Verdict</th><th>Who</th><th>Distance</th></tr></thead>
         <tbody id="events-body"></tbody>
       </table>
+      <div class="pager">
+        <button id="prev-page" type="button">‹ Prev</button>
+        <span class="page-info" id="page-info"></span>
+        <button id="next-page" type="button">Next ›</button>
+      </div>
     </section>
   </main>
 
   <script>
     const fmtTime = ts => ts ? new Date(ts * 1000).toLocaleString() : "—";
     const esc = s => s == null ? '' : String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const relTime = ts => {
+      if (!ts) return '';
+      const d = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+      if (d < 60) return 'just now';
+      if (d < 3600) return Math.floor(d / 60) + ' min ago';
+      if (d < 86400) return Math.floor(d / 3600) + ' h ago';
+      return Math.floor(d / 86400) + ' d ago';
+    };
+    const EVENTS_PAGE_SIZE = 25;
+    let eventsPage = 0;
     let chart;
+
+    function updateHero(ev) {
+      const ring = document.getElementById('hero-ring');
+      const state = document.getElementById('hero-state');
+      const time = document.getElementById('hero-time');
+      if (!ev) { ring.textContent = '◷'; state.textContent = 'No activity yet'; time.textContent = ''; return; }
+      const glyph = ev.verdict === 'granted' ? '✓' : (ev.verdict === 'spoof' ? '⬡' : '✕');
+      const label = ev.verdict === 'granted' ? 'granted' : (ev.verdict === 'spoof' ? 'spoof blocked' : 'denied');
+      const who = ev.person ? esc(ev.person) : (ev.verdict === 'granted' ? 'Someone' : 'Unknown');
+      ring.textContent = glyph;
+      state.innerHTML = `<b>${who}</b> · ${label}`;
+      time.textContent = relTime(ev.ts);
+    }
 
     async function refreshStats() {
       const days = document.getElementById('range').value;
       const s = await (await fetch(`/api/stats?days=${days}`)).json();
       document.getElementById('s-granted').textContent = s.granted_today;
       document.getElementById('s-denied').textContent = s.denied_today;
+      document.getElementById('s-spoof').textContent = s.spoof_today;
       document.getElementById('s-last').textContent =
         s.last_seen ? new Date(s.last_seen * 1000).toLocaleTimeString() : "—";
       drawChart(s.series);
+      // hero reflects the latest event overall (unfiltered)
+      const last = await (await fetch('/api/events?limit=1')).json();
+      updateHero(last[0]);
     }
 
     function drawChart(series) {
       const data = {
         labels: series.labels.map(d => d.slice(5)),
         datasets: [
-          { label: 'Granted', data: series.granted, backgroundColor: '#22c55e' },
-          { label: 'Denied',  data: series.denied,  backgroundColor: '#ef4444' },
+          { label: 'Granted', data: series.granted, backgroundColor: '#18181b' },
+          { label: 'Denied',  data: series.denied,  backgroundColor: '#a1a1aa' },
         ]
       };
       if (chart) { chart.data = data; chart.update(); return; }
@@ -134,29 +194,39 @@
         data,
         options: {
           responsive: true,
-          scales: { x: { stacked: true, grid: { color: '#222' }, ticks: { color: '#999' } },
-                    y: { stacked: true, grid: { color: '#222' }, ticks: { color: '#999' }, beginAtZero: true } },
-          plugins: { legend: { labels: { color: '#ccc' } } }
+          scales: { x: { stacked: true, grid: { color: '#e4e4e7' }, ticks: { color: '#71717a' } },
+                    y: { stacked: true, grid: { color: '#e4e4e7' }, ticks: { color: '#71717a' }, beginAtZero: true } },
+          plugins: { legend: { labels: { color: '#18181b' } } }
         }
       });
     }
 
     async function refreshEvents() {
       const verdict = document.getElementById('filter').value;
-      const rows = await (await fetch(`/api/events?limit=50&verdict=${verdict}`)).json();
+      const offset = eventsPage * EVENTS_PAGE_SIZE;
+      // fetch one extra row to know whether a next page exists (no count query needed)
+      const rows = await (await fetch(`/api/events?limit=${EVENTS_PAGE_SIZE + 1}&offset=${offset}&verdict=${verdict}`)).json();
+      const hasNext = rows.length > EVENTS_PAGE_SIZE;
+      const page = rows.slice(0, EVENTS_PAGE_SIZE);
       const body = document.getElementById('events-body');
-      body.innerHTML = rows.map(r => `
+      body.innerHTML = page.map(r => `
         <tr>
           <td>${r.snapshot_path ? `<img class="thumb" src="/snapshots/${r.snapshot_path}">` : ''}</td>
           <td>${fmtTime(r.ts)}</td>
-          <td><span class="badge ${r.verdict === 'granted' ? 'ok' : 'bad'}">${r.verdict}</span></td>
+          <td><span class="badge ${r.verdict === 'granted' ? 'ok' : (r.verdict === 'spoof' ? 'spoof' : 'bad')}">${r.verdict}</span></td>
           <td>${esc(r.person) || '—'}</td>
-          <td>${r.distance != null ? r.distance.toFixed(3) : '—'}</td>
+          <td>${r.distance != null ? r.distance.toFixed(3) : (r.antispoof_score != null ? 'spoof ' + Number(r.antispoof_score).toFixed(2) : '—')}</td>
         </tr>`).join('') || `<tr><td colspan="5" class="muted">No events yet.</td></tr>`;
+      document.getElementById('prev-page').disabled = eventsPage === 0;
+      document.getElementById('next-page').disabled = !hasNext;
+      document.getElementById('page-info').textContent =
+        page.length ? `Showing ${offset + 1}–${offset + page.length}` : 'No events';
     }
 
     document.getElementById('range').onchange = refreshStats;
-    document.getElementById('filter').onchange = refreshEvents;
+    document.getElementById('filter').onchange = () => { eventsPage = 0; refreshEvents(); };
+    document.getElementById('prev-page').onclick = () => { if (eventsPage > 0) { eventsPage--; refreshEvents(); } };
+    document.getElementById('next-page').onclick = () => { eventsPage++; refreshEvents(); };
     // Load once on page load. Reload the page to refresh stats/events.
     refreshStats();
     refreshEvents();

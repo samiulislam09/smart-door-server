@@ -92,30 +92,34 @@ def init_db():
         cur.execute(_DDL)
         cur.execute(_DDL_USERS)
         cur.execute(_DDL_USER_PHOTOS)
-        _ensure_person_column(cur)
+        _ensure_event_column(cur, "person", "VARCHAR(64) NULL")
+        _ensure_event_column(cur, "antispoof_score", "DOUBLE NULL")
 
 
-def _ensure_person_column(cur):
-    """Add events.person once (no IF NOT EXISTS for ADD COLUMN on older MySQL)."""
+def _ensure_event_column(cur, name, coltype):
+    """Add events.<name> once (no IF NOT EXISTS for ADD COLUMN on older MySQL). `name`
+    and `coltype` are code constants, never user input."""
     cur.execute(
         "SELECT COUNT(*) c FROM information_schema.COLUMNS "
-        "WHERE TABLE_SCHEMA=%s AND TABLE_NAME='events' AND COLUMN_NAME='person'",
-        (os.environ.get("MYSQL_DB", "smartdoor"),),
+        "WHERE TABLE_SCHEMA=%s AND TABLE_NAME='events' AND COLUMN_NAME=%s",
+        (os.environ.get("MYSQL_DB", "smartdoor"), name),
     )
     if cur.fetchone()["c"] == 0:
-        cur.execute("ALTER TABLE events ADD COLUMN person VARCHAR(64) NULL")
+        cur.execute(f"ALTER TABLE events ADD COLUMN {name} {coltype}")
 
 
-def log_event(verdict, distance, threshold, person=None, jpeg_bytes=None):
+def log_event(verdict, distance, threshold, person=None, jpeg_bytes=None,
+              antispoof_score=None):
     """Insert one event; if jpeg_bytes given, save assets/snapshots/<id>.jpg and record it.
 
-    `person` is the matched user's name (NULL for denied). Returns the new event id.
+    `person` is the matched user's name (NULL for denied). `antispoof_score` is set only on
+    'spoof' events. Returns the new event id.
     """
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO events (ts, verdict, distance, threshold, person) "
-            "VALUES (%s,%s,%s,%s,%s)",
-            (time.time(), verdict, distance, threshold, person),
+            "INSERT INTO events (ts, verdict, distance, threshold, person, antispoof_score) "
+            "VALUES (%s,%s,%s,%s,%s,%s)",
+            (time.time(), verdict, distance, threshold, person, antispoof_score),
         )
         event_id = cur.lastrowid
         if jpeg_bytes:
@@ -125,15 +129,19 @@ def log_event(verdict, distance, threshold, person=None, jpeg_bytes=None):
     return event_id
 
 
-def query_events(limit=50, verdict=None):
-    """Most recent events (optionally filtered to 'granted'/'denied'), newest first."""
-    sql = "SELECT id, ts, verdict, distance, threshold, person, snapshot_path FROM events"
+def query_events(limit=50, verdict=None, offset=0):
+    """Most recent events (optionally filtered to 'granted'/'denied'), newest first.
+
+    `offset` skips that many of the newest rows (for pagination)."""
+    sql = ("SELECT id, ts, verdict, distance, threshold, person, antispoof_score, "
+           "snapshot_path FROM events")
     args = []
     if verdict in ("granted", "denied"):
         sql += " WHERE verdict=%s"
         args.append(verdict)
-    sql += " ORDER BY ts DESC LIMIT %s"
+    sql += " ORDER BY ts DESC LIMIT %s OFFSET %s"
     args.append(int(limit))
+    args.append(max(0, int(offset)))
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(sql, args)
         return cur.fetchall()
@@ -283,6 +291,7 @@ def stats(days=7):
     return {
         "granted_today": today_counts.get("granted", 0),
         "denied_today": today_counts.get("denied", 0),
+        "spoof_today": today_counts.get("spoof", 0),
         "last_seen": last_seen,
         "series": {"labels": labels, "granted": granted, "denied": denied},
     }

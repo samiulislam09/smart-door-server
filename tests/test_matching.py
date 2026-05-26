@@ -68,3 +68,22 @@ def test_bytes_to_embedding_is_writable():
     v = np.array([0.1, 0.2], dtype=np.float32)
     restored = matching.bytes_to_embedding(matching.embedding_to_bytes(v))
     assert restored.flags.writeable is True
+
+
+def test_is_spoof_blocks_confident_fake():
+    assert matching.is_spoof(False, 0.95, 0.0) is True
+    assert matching.is_spoof(False, 0.95, 0.9) is True
+
+
+def test_is_spoof_passes_low_confidence_fake_when_threshold_raised():
+    # model says fake but only 0.5 confident; with min_score 0.9 we don't block it
+    assert matching.is_spoof(False, 0.5, 0.9) is False
+
+
+def test_is_spoof_never_blocks_real():
+    assert matching.is_spoof(True, 0.99, 0.0) is False
+
+
+def test_is_spoof_safe_on_none():
+    assert matching.is_spoof(None, None, 0.0) is False
+    assert matching.is_spoof(False, None, 0.0) is False
