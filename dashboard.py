@@ -8,7 +8,7 @@ import os
 from functools import wraps
 
 from flask import (Blueprint, request, session, redirect, url_for,
-                   render_template, jsonify, send_from_directory)
+                   render_template, jsonify, send_from_directory, abort)
 
 import db
 
@@ -51,15 +51,16 @@ def logout():
 @bp.route("/dashboard")
 @login_required
 def home():
-    return render_template("dashboard.html")
+    return render_template("dashboard.html", users=db.list_users())
 
 
 @bp.route("/api/events")
 @login_required
 def api_events():
     limit = min(int(request.args.get("limit", 50)), 200)
+    offset = max(0, int(request.args.get("offset", 0)))
     verdict = request.args.get("verdict") or None
-    return jsonify(db.query_events(limit=limit, verdict=verdict))
+    return jsonify(db.query_events(limit=limit, verdict=verdict, offset=offset))
 
 
 @bp.route("/api/stats")
@@ -75,20 +76,57 @@ def snapshot(fname):
     return send_from_directory(db.SNAPSHOT_DIR, fname)
 
 
-@bp.route("/owner.jpg")
+@bp.route("/api/users")
 @login_required
-def owner_photo():
-    import server
-    return send_from_directory(str(db._BASE), server.OWNER_IMG,
+def api_users():
+    return jsonify(db.list_users())
+
+
+@bp.route("/user_photos/<int:pid>")
+@login_required
+def user_photo(pid):
+    row = db.get_photo(pid)
+    if not row:
+        abort(404)
+    return send_from_directory(str(db.ASSETS_USERS_DIR), row["image_path"],
                                mimetype="image/jpeg")
 
 
-@bp.route("/owner", methods=["POST"])
+@bp.route("/users", methods=["POST"])
 @login_required
-def owner_upload():
+def users_create():
     import server
     file = request.files.get("photo")
     if not file:
         return redirect(url_for("dashboard.home", msg="No file selected"))
-    ok, message = server.reenroll_owner(file.read())
+    ok, message = server.enroll_user(request.form.get("name", ""), file.read())
     return redirect(url_for("dashboard.home", msg=message))
+
+
+@bp.route("/users/<int:uid>/photos", methods=["POST"])
+@login_required
+def users_add_photo(uid):
+    import server
+    file = request.files.get("photo")
+    if not file:
+        return redirect(url_for("dashboard.home", msg="No file selected"))
+    ok, message = server.add_user_photo(uid, file.read())
+    return redirect(url_for("dashboard.home", msg=message))
+
+
+@bp.route("/users/<int:uid>/delete", methods=["POST"])
+@login_required
+def users_delete(uid):
+    import server
+    db.delete_user(uid)
+    server.init_owners()
+    return redirect(url_for("dashboard.home", msg="User removed."))
+
+
+@bp.route("/photos/<int:pid>/delete", methods=["POST"])
+@login_required
+def photo_delete(pid):
+    import server
+    db.delete_photo(pid)
+    server.init_owners()
+    return redirect(url_for("dashboard.home", msg="Photo removed."))
