@@ -59,7 +59,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default=DEFAULT_URL)
     ap.add_argument("--owner", default="owner.jpg")
-    ap.add_argument("--stranger", help="path to a non-owner face image (expect BUZZER)")
+    ap.add_argument("--user", help="path to a second enrolled person's face (expect UNLOCK)")
+    ap.add_argument("--stranger", help="path to a non-enrolled face image (expect BUZZER)")
     args = ap.parse_args()
 
     print(f"Target: {args.url}\n")
@@ -67,11 +68,17 @@ def main():
     with open(args.owner, "rb") as f:
         run_case("owner    (expect UNLOCK)", f.read(), args.url)
 
+    if args.user:
+        with open(args.user, "rb") as f:
+            run_case("2nd user (expect UNLOCK)", f.read(), args.url)
+    else:
+        print("[2nd user (expect UNLOCK)] skipped - pass --user <path> to test a second enrolled person")
+
     if args.stranger:
         with open(args.stranger, "rb") as f:
             run_case("stranger (expect BUZZER)", f.read(), args.url)
     else:
-        print("[stranger (expect BUZZER)] skipped - pass --stranger <path> to test a non-owner face")
+        print("[stranger (expect BUZZER)] skipped - pass --stranger <path> to test a non-enrolled face")
 
     run_case("no-face  (expect IDLE)  ", blank_image_bytes(), args.url)
 

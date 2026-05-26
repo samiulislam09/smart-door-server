@@ -12,8 +12,11 @@ owner.
 
 Modules:
 - `server.py` — core door API (`/verify`), the live camera viewer (`/view`,
-  `/annotated_stream`), face matching (`match_face`/`init_owner`), `reenroll_owner`,
-  and debounced event logging. Registers the dashboard blueprint.
+  `/annotated_stream`), face matching (`match_face`/`init_owners`), enrollment
+  (`enroll_user`/`add_user_photo`), and debounced event logging. Registers the
+  dashboard blueprint.
+- `matching.py` — pure, dependency-light helpers (`best_match`, `cosine_distance`,
+  embedding (de)serialization, `validate_name`); unit-tested in `tests/`.
 - `db.py` — MySQL access layer (PyMySQL): `events` table, `log_event`, `query_events`,
   `stats`, `prune`. Loads `.env` on import. Snapshots saved under `snapshots/`.
 - `dashboard.py` — Flask blueprint: password login, `/dashboard`, JSON APIs
@@ -31,12 +34,13 @@ Flask consumes the body as form fields and `request.data` is empty.
 
 Flow: validate the bytes as an image (Pillow), write them to a temp `.jpg`, embed the
 face with `DeepFace.represent(model_name="SFace", detector_backend="opencv",
-enforce_detection=True)`, and compare (cosine distance) against the **owner embedding
-cached at startup** — `owner.jpg` is embedded once in `init_owner()`, not per request.
+enforce_detection=True)`, and compare (cosine distance) against **every enrolled face embedding cached at startup**
+(`init_owners()` loads them from MySQL); the closest match within threshold wins and its
+user name is returned. `owner.jpg` is migrated into an "Owner" user on first run.
 Response shape:
 
 ```json
-{"verified": true,  "reason": "match",    "distance": 0.31, "threshold": 0.593}
+{"verified": true,  "reason": "match",    "user": "Alice", "distance": 0.31, "threshold": 0.593}
 {"verified": false, "reason": "no_match", "distance": 0.91, "threshold": 0.593}
 {"verified": false, "reason": "no_face"}
 {"verified": false, "reason": "error", "error": "..."}
@@ -85,7 +89,10 @@ Key behavior to keep in mind when changing the matching logic:
   This is what keeps the buzzer silent at an empty doorway.
 - **Owner embedding is cached at startup** (`init_owner()` runs at import). Per-check
   time is ~0.28s (vs ~0.86s when `DeepFace.verify` re-embedded `owner.jpg` every call).
-  If you replace `owner.jpg`, restart the server to re-cache. Model = SFace (fastest);
+  If you replace `owner.jpg`, restart the server to re-cache. Multiple users are supported: each person has one or more reference photos stored under
+  `assets/users/` with their embedding in MySQL (`users`/`user_photos` tables). Enroll and
+  manage them from the dashboard ("Users" card). A match returns the person's name in the
+  `user` field and logs it to `events.person`. Model = SFace (fastest);
   override with `FACE_MODEL` env. Distance metric is cosine; threshold captured at boot.
 - Only the literal `verified` field is ever `true` in the JSON — the firmware relies on
   a substring check, so don't add other boolean-`true` fields.
@@ -131,4 +138,6 @@ python simulate_esp32.py                      # owner (UNLOCK) + blank frame (ID
 python simulate_esp32.py --stranger face.jpg  # also test a non-owner face (BUZZER)
 ```
 
-There are no linters or build steps; `simulate_esp32.py` is the integration test.
+Pure matching/validation logic has pytest unit tests: `python -m pytest tests/`.
+`simulate_esp32.py` is the end-to-end integration test (`--user` tests a second enrolled
+person, `--stranger` a non-enrolled face).
