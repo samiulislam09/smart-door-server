@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 The face-verification backend for a smart door lock. The door-side client is an
 ESP32-CAM (`~/Documents/Arduino/smart-door/smart-door.ino`): it captures a frame,
 POSTs the raw JPEG bytes to this server, and uses the response to drive a servo lock
-and a buzzer. `owner.jpg` is the enrolled reference face — replacing it re-enrolls the
-owner.
+and a buzzer. Multiple residents can be enrolled (each with one or more reference photos);
+`owner.jpg` seeds an "Owner" user on first run, and the door unlocks for any enrolled face.
 
 Modules:
 - `server.py` — core door API (`/verify`), the live camera viewer (`/view`,
@@ -20,7 +20,9 @@ Modules:
 - `db.py` — MySQL access layer (PyMySQL): `events` table, `log_event`, `query_events`,
   `stats`, `prune`. Loads `.env` on import. Snapshots saved under `snapshots/`.
 - `dashboard.py` — Flask blueprint: password login, `/dashboard`, JSON APIs
-  (`/api/events`, `/api/stats`), `/snapshots/<f>`, owner re-enroll (`/owner`).
+  (`/api/events`, `/api/stats`, `/api/users`), `/snapshots/<f>`, user photo serving
+  (`/user_photos/<id>`), and user management (`/users`, `/users/<id>/photos`,
+  `/users/<id>/delete`, `/photos/<id>/delete`).
 - `templates/` + `static/` — dashboard UI (dark theme, vendored Chart.js).
 - `.env` — MySQL creds + `DASHBOARD_PASSWORD` + `SECRET_KEY` (not committed; loaded by
   `db._load_dotenv`).
@@ -74,9 +76,11 @@ the posted JPEG to `snapshots/<id>.jpg`; `prune()` (every 50th insert) caps rete
 The dashboard (`/dashboard`, blueprint in `dashboard.py`) is password-gated
 (`DASHBOARD_PASSWORD`, default `admin`) via Flask session. It polls `/api/stats` and
 `/api/events` every 3s and embeds `/annotated_stream`. `/verify` stays open (the ESP has
-no login); `/view`, `/annotated_stream`, and all dashboard routes require login. Owner
-re-enroll (`/owner`) validates a face is present, overwrites `owner.jpg`, and calls
-`init_owner()` to re-cache live.
+no login); `/view`, `/annotated_stream`, and all dashboard routes require login. User
+management (the "Users" card) lets you add a user (`enroll_user`), add more photos to a
+user (`add_user_photo`), and delete photos/users; each enroll validates a face is present,
+stores the photo under `assets/users/` with its embedding in MySQL, and calls
+`init_owners()` to re-cache live.
 
 Key behavior to keep in mind when changing the matching logic:
 - **Never re-encode the JPEG at default quality.** Writing the incoming bytes verbatim
@@ -87,8 +91,10 @@ Key behavior to keep in mind when changing the matching logic:
   `ValueError` wraps a chained `FaceNotDetected` cause — `_is_no_face()` walks the
   `__cause__`/`__context__` chain to map it to `reason: "no_face"` rather than `error`.
   This is what keeps the buzzer silent at an empty doorway.
-- **Owner embedding is cached at startup** (`init_owner()` runs at import). Per-check
-  time is ~0.28s (vs ~0.86s when `DeepFace.verify` re-embedded `owner.jpg` every call).
+- **Enrolled embeddings are cached at startup** (`init_owners()` runs at import, loading
+  every photo's embedding from MySQL). Per-check time is ~0.28s (one embed of the incoming
+  frame, then N cheap cosine comparisons; vs ~0.86s when `DeepFace.verify` re-embedded
+  `owner.jpg` every call).
   If you replace `owner.jpg`, restart the server to re-cache. Multiple users are supported: each person has one or more reference photos stored under
   `assets/users/` with their embedding in MySQL (`users`/`user_photos` tables). Enroll and
   manage them from the dashboard ("Users" card). A match returns the person's name in the
@@ -134,8 +140,9 @@ End-to-end check without the hardware — `simulate_esp32.py` mimics the ESP32 (
 owner / stranger / no-face frames and prints the door action each would trigger):
 
 ```bash
-python simulate_esp32.py                      # owner (UNLOCK) + blank frame (IDLE)
-python simulate_esp32.py --stranger face.jpg  # also test a non-owner face (BUZZER)
+python simulate_esp32.py                       # owner (UNLOCK) + blank frame (IDLE)
+python simulate_esp32.py --user alice.jpg      # also test a second enrolled person (UNLOCK)
+python simulate_esp32.py --stranger face.jpg   # also test a non-enrolled face (BUZZER)
 ```
 
 Pure matching/validation logic has pytest unit tests: `python -m pytest tests/`.
