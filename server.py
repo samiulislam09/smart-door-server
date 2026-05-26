@@ -317,9 +317,31 @@ def _ensure_recognizer():
         threading.Thread(target=_recognizer_loop, daemon=True).start()
 
 
+# Seconds to wait between reconnect attempts while the camera is unreachable.
+STREAM_RETRY_DELAY = 2.0
+
+
+def _placeholder_frame(text):
+    """A calm dark placeholder (not an alarming red error) shown while the camera is
+    unreachable; the stream keeps retrying behind it."""
+    img = np.full((360, 640, 3), 17, np.uint8)  # dark background (#111)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    (tw, _th), _ = cv2.getTextSize(text, font, 0.8, 2)
+    cv2.putText(img, text, ((640 - tw) // 2, 190), font, 0.8, (200, 200, 200), 2)
+    return img
+
+
+def _encode_part(frame):
+    """Encode a BGR frame as one multipart MJPEG chunk, or None if encoding fails."""
+    ok, out = cv2.imencode(".jpg", frame)
+    if not ok:
+        return None
+    return b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + out.tobytes() + b"\r\n"
+
+
 def _mjpeg_frames(url):
     """Yield raw JPEG frames from an MJPEG HTTP stream by scanning SOI/EOI markers."""
-    with urllib.request.urlopen(url, timeout=10) as resp:
+    with urllib.request.urlopen(url, timeout=5) as resp:
         buf = b""
         while True:
             chunk = resp.read(8192)
@@ -337,31 +359,32 @@ def _mjpeg_frames(url):
 
 
 def _annotated_stream(src):
+    """Proxy the ESP32 MJPEG stream with face-box/verdict overlays. If the camera is
+    unreachable, show a calm 'camera offline' placeholder and keep reconnecting within
+    the same response, auto-resuming when the camera returns. The loop ends when the
+    client disconnects (the server stops iterating this generator)."""
     global _view_latest_frame, _view_frame_ts
     _ensure_recognizer()
-    try:
-        for jpg in _mjpeg_frames(src):
-            frame = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
-            if frame is None:
-                continue
-            with _view_lock:
-                _view_latest_frame = frame
-                _view_frame_ts = time.time()
-            reason, distance, threshold, person = _view_verdict   # atomic tuple read
-            _draw(frame, _detect_faces(frame), reason, distance, threshold, person)
-            ok, out = cv2.imencode(".jpg", frame)
-            if not ok:
-                continue
-            yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
-                   + out.tobytes() + b"\r\n")
-    except Exception as e:
-        blank = np.zeros((240, 640, 3), np.uint8)
-        cv2.putText(blank, f"stream error: {str(e)[:48]}", (10, 120),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-        ok, out = cv2.imencode(".jpg", blank)
-        if ok:
-            yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
-                   + out.tobytes() + b"\r\n")
+    while True:
+        try:
+            for jpg in _mjpeg_frames(src):
+                frame = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
+                if frame is None:
+                    continue
+                with _view_lock:
+                    _view_latest_frame = frame
+                    _view_frame_ts = time.time()
+                reason, distance, threshold, person = _view_verdict   # atomic tuple read
+                _draw(frame, _detect_faces(frame), reason, distance, threshold, person)
+                part = _encode_part(frame)
+                if part:
+                    yield part
+        except Exception:
+            pass  # connection failed/dropped -> fall through to the offline placeholder
+        part = _encode_part(_placeholder_frame("Camera offline - retrying..."))
+        if part:
+            yield part
+        time.sleep(STREAM_RETRY_DELAY)
 
 
 @app.route('/annotated_stream')
