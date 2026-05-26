@@ -87,7 +87,7 @@ body {
   display: flex; align-items: center; justify-content: space-between;
   font-weight: 600; margin-bottom: 14px;
 }
-.cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
 @media (max-width: 900px) {
   .cards { grid-template-columns: repeat(2, 1fr); }
@@ -99,16 +99,32 @@ body {
 .stat-value.ok { color: var(--ok); }
 .stat-value.bad { color: var(--bad); }
 
-.owner { display: flex; flex-direction: column; }
-.owner img { width: 64px; height: 64px; object-fit: cover; border-radius: 10px;
-             margin: 8px 0; border: 1px solid var(--border); }
-.owner-form { display: flex; gap: 6px; }
-.owner-form input[type=file] { font-size: 11px; color: var(--muted); width: 100%; }
-.owner-form button, #range, #filter {
+/* shared control look (was .owner-form button) */
+.owner-form button, #range, #filter,
+.users-card button, .users-card input[type=text] {
   background: var(--panel-2); color: var(--text);
   border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px;
   font-size: 13px; cursor: pointer;
 }
+
+/* ---- users management ---- */
+.user-row { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.user-head { display: flex; align-items: center; justify-content: space-between; }
+.user-name { font-weight: 600; }
+.user-photos { display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+               margin-top: 8px; }
+.user-photo { position: relative; }
+.user-photo img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px;
+                  border: 1px solid var(--border); display: block; }
+.btn-del-x { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px;
+             line-height: 1; padding: 0; border-radius: 999px; }
+.btn-del { background: rgba(239,68,68,.15); color: var(--bad);
+           border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px;
+           font-size: 12px; cursor: pointer; }
+.add-photo input[type=file] { font-size: 11px; color: var(--muted); width: 130px; }
+.add-user { display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+            margin-top: 14px; }
+.add-user input[type=file] { font-size: 12px; color: var(--muted); }
 
 .live { width: 100%; border-radius: 10px; background: #000; display: block; }
 .legend { color: var(--muted); font-size: 13px; margin: 10px 0 0; }

@@ -26,14 +26,49 @@
       <div class="card stat"><div class="stat-label">Granted today</div><div class="stat-value ok" id="s-granted">–</div></div>
       <div class="card stat"><div class="stat-label">Denied today</div><div class="stat-value bad" id="s-denied">–</div></div>
       <div class="card stat"><div class="stat-label">Last seen</div><div class="stat-value" id="s-last">–</div></div>
-      <div class="card owner">
-        <div class="stat-label">Enrolled owner</div>
-        <img id="owner-img" src="{{ url_for('dashboard.owner_photo') }}?t=0" alt="owner">
-        <form class="owner-form" method="post" action="{{ url_for('dashboard.owner_upload') }}" enctype="multipart/form-data">
-          <input type="file" name="photo" accept="image/*" required>
-          <button type="submit">Re-enroll</button>
-        </form>
+    </section>
+
+    <section class="card users-card">
+      <div class="card-title">Users <span class="muted">· {{ users|length }} enrolled</span></div>
+
+      {% for u in users %}
+      <div class="user-row">
+        <div class="user-head">
+          <span class="user-name">{{ u.name }}</span>
+          <form method="post" action="{{ url_for('dashboard.users_delete', uid=u.id) }}"
+                onsubmit="return confirm('Remove {{ u.name }} and all their photos?');">
+            <button class="btn-del" type="submit">delete user</button>
+          </form>
+        </div>
+        <div class="user-photos">
+          {% for pid in u.photos %}
+          <div class="user-photo">
+            <img src="{{ url_for('dashboard.user_photo', pid=pid) }}" alt="{{ u.name }}">
+            <form method="post" action="{{ url_for('dashboard.photo_delete', pid=pid) }}">
+              <button class="btn-del-x" type="submit" title="remove photo">&times;</button>
+            </form>
+          </div>
+          {% else %}
+          <span class="muted">no photos — this user can't match</span>
+          {% endfor %}
+          <form class="add-photo" method="post"
+                action="{{ url_for('dashboard.users_add_photo', uid=u.id) }}"
+                enctype="multipart/form-data">
+            <input type="file" name="photo" accept="image/*" required>
+            <button type="submit">+ add photo</button>
+          </form>
+        </div>
       </div>
+      {% else %}
+      <p class="muted">No users enrolled yet. Add one below.</p>
+      {% endfor %}
+
+      <form class="add-user" method="post" action="{{ url_for('dashboard.users_create') }}"
+            enctype="multipart/form-data">
+        <input type="text" name="name" placeholder="Name" maxlength="64" required>
+        <input type="file" name="photo" accept="image/*" required>
+        <button type="submit">Add user</button>
+      </form>
     </section>
 
     <section class="grid-2">
@@ -63,7 +98,7 @@
         </select>
       </div>
       <table class="events">
-        <thead><tr><th></th><th>Time</th><th>Verdict</th><th>Distance</th></tr></thead>
+        <thead><tr><th></th><th>Time</th><th>Verdict</th><th>Who</th><th>Distance</th></tr></thead>
         <tbody id="events-body"></tbody>
       </table>
     </section>
@@ -113,8 +148,9 @@
           <td>${r.snapshot_path ? `<img class="thumb" src="/snapshots/${r.snapshot_path}">` : ''}</td>
           <td>${fmtTime(r.ts)}</td>
           <td><span class="badge ${r.verdict === 'granted' ? 'ok' : 'bad'}">${r.verdict}</span></td>
+          <td>${r.person || '—'}</td>
           <td>${r.distance != null ? r.distance.toFixed(3) : '—'}</td>
-        </tr>`).join('') || `<tr><td colspan="4" class="muted">No events yet.</td></tr>`;
+        </tr>`).join('') || `<tr><td colspan="5" class="muted">No events yet.</td></tr>`;
     }
 
     document.getElementById('range').onchange = refreshStats;
