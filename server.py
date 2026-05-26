@@ -1,9 +1,10 @@
 from flask import Flask, request, jsonify, Response
 from deepface import DeepFace
-import io, tempfile, os, time, threading, urllib.request, shutil
+import io, tempfile, os, time, threading, urllib.request
 import cv2
 import numpy as np
 from PIL import Image
+import pymysql
 
 import db          # loads .env (MYSQL_*, DASHBOARD_PASSWORD, SECRET_KEY) on import
 import dashboard
@@ -155,7 +156,7 @@ def enroll_user(name_raw, jpeg_bytes):
         return False, emb_or_msg
     try:
         user_id = db.create_user(name)
-    except Exception:
+    except pymysql.err.IntegrityError:
         return False, f"A user named '{name}' already exists."
     db.add_photo(user_id, out_bytes, matching.embedding_to_bytes(emb_or_msg), MODEL_NAME)
     init_owners()
@@ -260,7 +261,7 @@ def verify():
 # the stream loop just draws the latest cached verdict on each frame.
 
 _VERDICT_STYLE = {
-    "match":    ((0, 200, 0),    "MATCH (owner)"),
+    "match":    ((0, 200, 0),    "MATCH"),
     "no_match": ((0, 0, 255),    "NO MATCH"),
     "no_face":  ((0, 200, 255),  "no face"),
     "error":    ((0, 200, 255),  "verify error"),
