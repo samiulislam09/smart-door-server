@@ -157,7 +157,13 @@ def add_photo(user_id, jpeg_bytes, embedding_bytes, model_name):
         )
         photo_id = cur.lastrowid
         name = f"{photo_id}.jpg"
-        (ASSETS_USERS_DIR / name).write_bytes(jpeg_bytes)
+        try:
+            (ASSETS_USERS_DIR / name).write_bytes(jpeg_bytes)
+        except OSError:
+            # autocommit already persisted the row; drop it so we never leave a row
+            # pointing at a file that doesn't exist.
+            cur.execute("DELETE FROM user_photos WHERE id=%s", (photo_id,))
+            raise
         cur.execute("UPDATE user_photos SET image_path=%s WHERE id=%s", (name, photo_id))
     return photo_id
 
@@ -180,6 +186,7 @@ def update_embedding(photo_id, embedding_bytes, model_name):
 
 
 def user_count():
+    """Return the total number of enrolled users."""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) c FROM users")
         return cur.fetchone()["c"]
