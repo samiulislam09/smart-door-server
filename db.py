@@ -12,6 +12,7 @@ import pymysql
 
 _BASE = Path(__file__).resolve().parent
 SNAPSHOT_DIR = _BASE / "snapshots"
+ASSETS_USERS_DIR = _BASE / "assets" / "users"
 
 # Retention: keep the newest MAX_EVENTS rows and drop anything older than MAX_AGE_DAYS.
 MAX_EVENTS = 1000
@@ -61,23 +62,60 @@ CREATE TABLE IF NOT EXISTS events (
 ) ENGINE=InnoDB
 """
 
+_DDL_USERS = """
+CREATE TABLE IF NOT EXISTS users (
+    id         INT AUTO_INCREMENT PRIMARY KEY,
+    name       VARCHAR(64) NOT NULL UNIQUE,
+    created_at DOUBLE NOT NULL
+) ENGINE=InnoDB
+"""
+
+_DDL_USER_PHOTOS = """
+CREATE TABLE IF NOT EXISTS user_photos (
+    id         INT AUTO_INCREMENT PRIMARY KEY,
+    user_id    INT NOT NULL,
+    image_path VARCHAR(255) NOT NULL,
+    embedding  BLOB NOT NULL,
+    model_name VARCHAR(32) NOT NULL,
+    created_at DOUBLE NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    INDEX idx_user_photos_user (user_id)
+) ENGINE=InnoDB
+"""
+
 
 def init_db():
-    """Create the snapshots dir and the events table if missing."""
+    """Create dirs and tables if missing, and migrate the events table."""
     SNAPSHOT_DIR.mkdir(exist_ok=True)
+    ASSETS_USERS_DIR.mkdir(parents=True, exist_ok=True)
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(_DDL)
+        cur.execute(_DDL_USERS)
+        cur.execute(_DDL_USER_PHOTOS)
+        _ensure_person_column(cur)
 
 
-def log_event(verdict, distance, threshold, jpeg_bytes=None):
+def _ensure_person_column(cur):
+    """Add events.person once (no IF NOT EXISTS for ADD COLUMN on older MySQL)."""
+    cur.execute(
+        "SELECT COUNT(*) c FROM information_schema.COLUMNS "
+        "WHERE TABLE_SCHEMA=%s AND TABLE_NAME='events' AND COLUMN_NAME='person'",
+        (os.environ.get("MYSQL_DB", "smartdoor"),),
+    )
+    if cur.fetchone()["c"] == 0:
+        cur.execute("ALTER TABLE events ADD COLUMN person VARCHAR(64) NULL")
+
+
+def log_event(verdict, distance, threshold, person=None, jpeg_bytes=None):
     """Insert one event; if jpeg_bytes given, save snapshots/<id>.jpg and record it.
 
-    Returns the new event id.
+    `person` is the matched user's name (NULL for denied). Returns the new event id.
     """
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO events (ts, verdict, distance, threshold) VALUES (%s,%s,%s,%s)",
-            (time.time(), verdict, distance, threshold),
+            "INSERT INTO events (ts, verdict, distance, threshold, person) "
+            "VALUES (%s,%s,%s,%s,%s)",
+            (time.time(), verdict, distance, threshold, person),
         )
         event_id = cur.lastrowid
         if jpeg_bytes:
@@ -89,7 +127,7 @@ def log_event(verdict, distance, threshold, jpeg_bytes=None):
 
 def query_events(limit=50, verdict=None):
     """Most recent events (optionally filtered to 'granted'/'denied'), newest first."""
-    sql = "SELECT id, ts, verdict, distance, threshold, snapshot_path FROM events"
+    sql = "SELECT id, ts, verdict, distance, threshold, person, snapshot_path FROM events"
     args = []
     if verdict in ("granted", "denied"):
         sql += " WHERE verdict=%s"
@@ -99,6 +137,103 @@ def query_events(limit=50, verdict=None):
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(sql, args)
         return cur.fetchall()
+
+
+def create_user(name):
+    """Insert a user. Raises pymysql.err.IntegrityError on a duplicate name."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("INSERT INTO users (name, created_at) VALUES (%s,%s)",
+                    (name, time.time()))
+        return cur.lastrowid
+
+
+def add_photo(user_id, jpeg_bytes, embedding_bytes, model_name):
+    """Insert a photo row, write assets/users/<id>.jpg, record the path. Returns id."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO user_photos (user_id, image_path, embedding, model_name, created_at) "
+            "VALUES (%s,%s,%s,%s,%s)",
+            (user_id, "", embedding_bytes, model_name, time.time()),
+        )
+        photo_id = cur.lastrowid
+        name = f"{photo_id}.jpg"
+        (ASSETS_USERS_DIR / name).write_bytes(jpeg_bytes)
+        cur.execute("UPDATE user_photos SET image_path=%s WHERE id=%s", (name, photo_id))
+    return photo_id
+
+
+def all_photos():
+    """Every photo joined to its user's name. Used to build the in-memory match cache."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT p.id, p.user_id, p.image_path, p.embedding, p.model_name, u.name "
+            "FROM user_photos p JOIN users u ON u.id = p.user_id"
+        )
+        return cur.fetchall()
+
+
+def update_embedding(photo_id, embedding_bytes, model_name):
+    """Refresh a stored embedding (used when FACE_MODEL changed since enrollment)."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("UPDATE user_photos SET embedding=%s, model_name=%s WHERE id=%s",
+                    (embedding_bytes, model_name, photo_id))
+
+
+def user_count():
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) c FROM users")
+        return cur.fetchone()["c"]
+
+
+def list_users():
+    """[{id, name, photos: [photo_id, ...]}, ...], ordered by name."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT u.id, u.name, p.id pid FROM users u "
+            "LEFT JOIN user_photos p ON p.user_id = u.id "
+            "ORDER BY u.name, p.id"
+        )
+        rows = cur.fetchall()
+    users, by_id = [], {}
+    for r in rows:
+        u = by_id.get(r["id"])
+        if u is None:
+            u = {"id": r["id"], "name": r["name"], "photos": []}
+            by_id[r["id"]] = u
+            users.append(u)
+        if r["pid"] is not None:
+            u["photos"].append(r["pid"])
+    return users
+
+
+def get_photo(photo_id):
+    """Row {id, image_path} for serving, or None."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT id, image_path FROM user_photos WHERE id=%s", (photo_id,))
+        return cur.fetchone()
+
+
+def delete_photo(photo_id):
+    """Delete one photo row and unlink its file."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT image_path FROM user_photos WHERE id=%s", (photo_id,))
+        row = cur.fetchone()
+        if not row:
+            return
+        cur.execute("DELETE FROM user_photos WHERE id=%s", (photo_id,))
+    if row["image_path"]:
+        (ASSETS_USERS_DIR / row["image_path"]).unlink(missing_ok=True)
+
+
+def delete_user(user_id):
+    """Delete a user (cascades to photo rows) and unlink all their photo files."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT image_path FROM user_photos WHERE user_id=%s", (user_id,))
+        paths = [r["image_path"] for r in cur.fetchall()]
+        cur.execute("DELETE FROM users WHERE id=%s", (user_id,))
+    for p in paths:
+        if p:
+            (ASSETS_USERS_DIR / p).unlink(missing_ok=True)
 
 
 def _midnight_epoch():
