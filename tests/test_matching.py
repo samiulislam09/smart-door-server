@@ -54,3 +54,17 @@ def test_validate_name_rejects_too_long():
     ok, msg = matching.validate_name("x" * 65)
     assert ok is False
     assert "64" in msg
+
+
+def test_cosine_distance_zero_vector_is_not_nan():
+    zero = np.zeros(3, dtype=np.float32)
+    other = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    d = matching.cosine_distance(zero, other)
+    assert not np.isnan(d)
+    assert d == pytest.approx(1.0, abs=1e-6)
+
+
+def test_bytes_to_embedding_is_writable():
+    v = np.array([0.1, 0.2], dtype=np.float32)
+    restored = matching.bytes_to_embedding(matching.embedding_to_bytes(v))
+    assert restored.flags.writeable is True

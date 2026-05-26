@@ -7,9 +7,14 @@ import numpy as np
 
 
 def cosine_distance(a, b):
+    """Cosine distance in [0, 2]; 0 = identical direction. A zero-norm vector has no
+    direction, so it's treated as maximally distant (1.0) rather than yielding nan."""
     a = np.asarray(a, dtype=np.float32)
     b = np.asarray(b, dtype=np.float32)
-    return 1.0 - float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+    norm_a, norm_b = np.linalg.norm(a), np.linalg.norm(b)
+    if norm_a == 0 or norm_b == 0:
+        return 1.0
+    return 1.0 - float(np.dot(a, b) / (norm_a * norm_b))
 
 
 def best_match(embedding, owners, threshold):
@@ -37,8 +42,9 @@ def embedding_to_bytes(emb):
 
 
 def bytes_to_embedding(blob):
-    """Inverse of embedding_to_bytes."""
-    return np.frombuffer(blob, dtype=np.float32)
+    """Inverse of embedding_to_bytes. Returns a writable copy (np.frombuffer alone is
+    read-only, which would break any later in-place use)."""
+    return np.frombuffer(blob, dtype=np.float32).copy()
 
 
 def validate_name(raw):
