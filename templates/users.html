@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block content %}
+  <main class="wrap">
+    <section class="card users-card">
+      <div class="card-title">Users <span class="muted">· {{ users|length }} enrolled</span></div>
+
+      {% for u in users %}
+      <div class="user-row">
+        <div class="user-head">
+          {% if u.photos %}
+          <img class="user-avatar" src="{{ url_for('dashboard.user_photo', pid=u.photos[0]) }}" alt="{{ u.name }}">
+          {% else %}
+          <span class="user-avatar" style="display:inline-flex;align-items:center;justify-content:center;color:var(--muted)">?</span>
+          {% endif %}
+          <span class="user-name">{{ u.name }}</span>
+          <form method="post" action="{{ url_for('dashboard.users_delete', uid=u.id) }}"
+                data-name="{{ u.name }}"
+                onsubmit="return confirm('Remove ' + this.dataset.name + ' and all their photos?');">
+            <button class="btn-del" type="submit">delete user</button>
+          </form>
+        </div>
+        <div class="user-photos">
+          {% for pid in u.photos %}
+          <div class="user-photo">
+            <img src="{{ url_for('dashboard.user_photo', pid=pid) }}" alt="{{ u.name }}">
+            <form method="post" action="{{ url_for('dashboard.photo_delete', pid=pid) }}">
+              <button class="btn-del-x" type="submit" title="remove photo">&times;</button>
+            </form>
+          </div>
+          {% else %}
+          <span class="muted">no photos — this user can't match</span>
+          {% endfor %}
+          <form class="add-photo" method="post"
+                action="{{ url_for('dashboard.users_add_photo', uid=u.id) }}"
+                enctype="multipart/form-data">
+            <label class="file">
+              <input type="file" name="photo" accept="image/*" onchange="this.form.submit()">
+              <span class="file-btn">+ add photo</span>
+            </label>
+          </form>
+        </div>
+      </div>
+      {% else %}
+      <p class="muted">No users enrolled yet. Add one below.</p>
+      {% endfor %}
+
+      <form class="add-user" method="post" action="{{ url_for('dashboard.users_create') }}"
+            enctype="multipart/form-data">
+        <input type="text" name="name" placeholder="Name" maxlength="64" required>
+        <label class="file">
+          <input type="file" name="photo" accept="image/*" required
+                 onchange="this.closest('.file').querySelector('.file-name').textContent = this.files[0] ? this.files[0].name : ''">
+          <span class="file-btn">Choose photo</span>
+          <span class="file-name"></span>
+        </label>
+        <button class="btn-primary" type="submit">Add user</button>
+      </form>
+    </section>
+  </main>
+{% endblock %}

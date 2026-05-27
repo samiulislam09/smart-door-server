@@ -1,30 +1,14 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Smart Door · Dashboard</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+{% extends "base.html" %}
+{% block head %}
   <script src="{{ url_for('static', filename='chart.min.js') }}"></script>
-</head>
-<body>
-  <header class="topbar">
-    <div class="brand">▦ <span>Smart Door</span></div>
-    <div class="topbar-right">
-      <span class="status"><span class="dot"></span> online</span>
-      <a class="btn-ghost" href="{{ url_for('dashboard.logout') }}">Logout</a>
-    </div>
-  </header>
+{% endblock %}
 
-  {% if request.args.get('msg') %}
-  <div class="toast">{{ request.args.get('msg') }}</div>
-  {% endif %}
-
+{% block content %}
   <main class="wrap">
     <!-- door-status hero -->
     <section class="hero">
       <div class="hero-ring" id="hero-ring">◷</div>
-      <div>
+      <div class="hero-body">
         <div class="hero-label">Door status</div>
         <div class="hero-state" id="hero-state">Loading…</div>
       </div>
@@ -37,62 +21,6 @@
       <div class="card stat"><div class="stat-label">✕ Denied today</div><div class="stat-value" id="s-denied">–</div></div>
       <div class="card stat"><div class="stat-label">⬡ Spoof today</div><div class="stat-value" id="s-spoof">–</div></div>
       <div class="card stat"><div class="stat-label">◷ Last seen</div><div class="stat-value sm" id="s-last">–</div></div>
-    </section>
-
-    <section class="card users-card">
-      <div class="card-title">Users <span class="muted">· {{ users|length }} enrolled</span></div>
-
-      {% for u in users %}
-      <div class="user-row">
-        <div class="user-head">
-          {% if u.photos %}
-          <img class="user-avatar" src="{{ url_for('dashboard.user_photo', pid=u.photos[0]) }}" alt="{{ u.name }}">
-          {% else %}
-          <span class="user-avatar" style="display:inline-flex;align-items:center;justify-content:center;color:var(--muted)">?</span>
-          {% endif %}
-          <span class="user-name">{{ u.name }}</span>
-          <form method="post" action="{{ url_for('dashboard.users_delete', uid=u.id) }}"
-                data-name="{{ u.name }}"
-                onsubmit="return confirm('Remove ' + this.dataset.name + ' and all their photos?');">
-            <button class="btn-del" type="submit">delete user</button>
-          </form>
-        </div>
-        <div class="user-photos">
-          {% for pid in u.photos %}
-          <div class="user-photo">
-            <img src="{{ url_for('dashboard.user_photo', pid=pid) }}" alt="{{ u.name }}">
-            <form method="post" action="{{ url_for('dashboard.photo_delete', pid=pid) }}">
-              <button class="btn-del-x" type="submit" title="remove photo">&times;</button>
-            </form>
-          </div>
-          {% else %}
-          <span class="muted">no photos — this user can't match</span>
-          {% endfor %}
-          <form class="add-photo" method="post"
-                action="{{ url_for('dashboard.users_add_photo', uid=u.id) }}"
-                enctype="multipart/form-data">
-            <label class="file">
-              <input type="file" name="photo" accept="image/*" onchange="this.form.submit()">
-              <span class="file-btn">+ add photo</span>
-            </label>
-          </form>
-        </div>
-      </div>
-      {% else %}
-      <p class="muted">No users enrolled yet. Add one below.</p>
-      {% endfor %}
-
-      <form class="add-user" method="post" action="{{ url_for('dashboard.users_create') }}"
-            enctype="multipart/form-data">
-        <input type="text" name="name" placeholder="Name" maxlength="64" required>
-        <label class="file">
-          <input type="file" name="photo" accept="image/*" required
-                 onchange="this.closest('.file').querySelector('.file-name').textContent = this.files[0] ? this.files[0].name : ''">
-          <span class="file-btn">Choose photo</span>
-          <span class="file-name"></span>
-        </label>
-        <button class="btn-primary" type="submit">Add user</button>
-      </form>
     </section>
 
     <section class="grid-2">
@@ -138,6 +66,28 @@
     </section>
   </main>
 
+  <div id="event-modal" class="modal-backdrop">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="em-title">
+      <div class="modal-head">
+        <span id="em-title">Event details</span>
+        <button type="button" id="em-close" class="modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="em-snapshot" class="modal-snap"></div>
+        <dl class="modal-fields">
+          <dt>Verdict</dt><dd id="em-verdict"></dd>
+          <dt>Who</dt><dd id="em-who"></dd>
+          <dt>Time</dt><dd id="em-time"></dd>
+          <dt>Distance / threshold</dt><dd id="em-distance"></dd>
+          <dt id="em-spoof-dt">Anti-spoof score</dt><dd id="em-spoof-dd"></dd>
+          <dt>Event ID</dt><dd id="em-id"></dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+{% endblock %}
+
+{% block scripts %}
   <script>
     const fmtTime = ts => ts ? new Date(ts * 1000).toLocaleString() : "—";
     const esc = s => s == null ? '' : String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -151,19 +101,26 @@
     };
     const EVENTS_PAGE_SIZE = 25;
     let eventsPage = 0;
+    let currentEvents = [];   // rows of the page currently shown, indexed by data-idx
     let chart;
 
     function updateHero(ev) {
+      const hero = document.querySelector('.hero');
       const ring = document.getElementById('hero-ring');
       const state = document.getElementById('hero-state');
       const time = document.getElementById('hero-time');
-      if (!ev) { ring.textContent = '◷'; state.textContent = 'No activity yet'; time.textContent = ''; return; }
+      if (!ev) {
+        ring.textContent = '◷'; state.textContent = 'No activity yet'; time.textContent = '';
+        hero.className = 'hero is-idle'; return;
+      }
       const glyph = ev.verdict === 'granted' ? '✓' : (ev.verdict === 'spoof' ? '⬡' : '✕');
       const label = ev.verdict === 'granted' ? 'granted' : (ev.verdict === 'spoof' ? 'spoof blocked' : 'denied');
       const who = ev.person ? esc(ev.person) : (ev.verdict === 'granted' ? 'Someone' : 'Unknown');
+      const cls = ev.verdict === 'granted' ? 'is-granted' : (ev.verdict === 'spoof' ? 'is-spoof' : 'is-denied');
       ring.textContent = glyph;
       state.innerHTML = `<b>${who}</b> · ${label}`;
       time.textContent = relTime(ev.ts);
+      hero.className = 'hero ' + cls;
     }
 
     async function refreshStats() {
@@ -181,22 +138,50 @@
     }
 
     function drawChart(series) {
+      const canvas = document.getElementById('chart');
+      const ctx = canvas.getContext('2d');
+      const h = canvas.height || 200;
+      // vertical gradients give the bars depth instead of a flat fill
+      const grantGrad = ctx.createLinearGradient(0, 0, 0, h);
+      grantGrad.addColorStop(0, '#4ade80'); grantGrad.addColorStop(1, '#15803d');
+      const denyGrad = ctx.createLinearGradient(0, 0, 0, h);
+      denyGrad.addColorStop(0, '#fb7185'); denyGrad.addColorStop(1, '#be123c');
+      const spoofGrad = ctx.createLinearGradient(0, 0, 0, h);
+      spoofGrad.addColorStop(0, '#fde047'); spoofGrad.addColorStop(1, '#a16207');
+
+      const barStyle = { borderRadius: 6, borderSkipped: false, maxBarThickness: 30 };
       const data = {
         labels: series.labels.map(d => d.slice(5)),
         datasets: [
-          { label: 'Granted', data: series.granted, backgroundColor: '#18181b' },
-          { label: 'Denied',  data: series.denied,  backgroundColor: '#a1a1aa' },
+          { label: 'Granted', data: series.granted, backgroundColor: grantGrad,
+            hoverBackgroundColor: '#22c55e', ...barStyle },
+          { label: 'Denied', data: series.denied, backgroundColor: denyGrad,
+            hoverBackgroundColor: '#f43f5e', ...barStyle },
+          { label: 'Spoof', data: series.spoof, backgroundColor: spoofGrad,
+            hoverBackgroundColor: '#eab308', ...barStyle },
         ]
       };
       if (chart) { chart.data = data; chart.update(); return; }
-      chart = new Chart(document.getElementById('chart'), {
+      chart = new Chart(canvas, {
         type: 'bar',
         data,
         options: {
           responsive: true,
-          scales: { x: { stacked: true, grid: { color: '#e4e4e7' }, ticks: { color: '#71717a' } },
-                    y: { stacked: true, grid: { color: '#e4e4e7' }, ticks: { color: '#71717a' }, beginAtZero: true } },
-          plugins: { legend: { labels: { color: '#18181b' } } }
+          scales: {
+            x: { stacked: true, grid: { display: false },
+                 ticks: { color: '#8b93a3', font: { size: 11 } } },
+            y: { stacked: true, beginAtZero: true,
+                 grid: { color: 'rgba(255,255,255,.06)' },
+                 ticks: { color: '#8b93a3', font: { size: 11 }, precision: 0 } }
+          },
+          plugins: {
+            legend: { position: 'top', align: 'end',
+              labels: { color: '#e6e9ef', usePointStyle: true, pointStyle: 'circle',
+                        boxWidth: 8, padding: 16 } },
+            tooltip: { backgroundColor: '#1d222c', titleColor: '#e6e9ef', bodyColor: '#e6e9ef',
+              borderColor: '#262c38', borderWidth: 1, padding: 10, cornerRadius: 8,
+              usePointStyle: true }
+          }
         }
       });
     }
@@ -209,8 +194,9 @@
       const hasNext = rows.length > EVENTS_PAGE_SIZE;
       const page = rows.slice(0, EVENTS_PAGE_SIZE);
       const body = document.getElementById('events-body');
-      body.innerHTML = page.map(r => `
-        <tr>
+      currentEvents = page;
+      body.innerHTML = page.map((r, i) => `
+        <tr data-idx="${i}">
           <td>${r.snapshot_path ? `<img class="thumb" src="/snapshots/${r.snapshot_path}">` : ''}</td>
           <td>${fmtTime(r.ts)}</td>
           <td><span class="badge ${r.verdict === 'granted' ? 'ok' : (r.verdict === 'spoof' ? 'spoof' : 'bad')}">${r.verdict}</span></td>
@@ -227,9 +213,49 @@
     document.getElementById('filter').onchange = () => { eventsPage = 0; refreshEvents(); };
     document.getElementById('prev-page').onclick = () => { if (eventsPage > 0) { eventsPage--; refreshEvents(); } };
     document.getElementById('next-page').onclick = () => { eventsPage++; refreshEvents(); };
+
+    // ---- event detail modal ----
+    function fmtDistance(r) {
+      const d = r.distance != null ? r.distance.toFixed(3) : '—';
+      const t = r.threshold != null ? r.threshold.toFixed(3) : '—';
+      return `${d} / ${t}`;
+    }
+    function openEventModal(r) {
+      const snap = document.getElementById('em-snapshot');
+      snap.innerHTML = r.snapshot_path
+        ? `<img src="/snapshots/${esc(r.snapshot_path)}" alt="event snapshot">`
+        : `<div class="no-snap">no snapshot</div>`;
+      const badgeClass = r.verdict === 'granted' ? 'ok' : (r.verdict === 'spoof' ? 'spoof' : 'bad');
+      document.getElementById('em-verdict').innerHTML = `<span class="badge ${badgeClass}">${esc(r.verdict)}</span>`;
+      document.getElementById('em-who').textContent = r.person || '—';
+      document.getElementById('em-time').textContent = `${fmtTime(r.ts)} (${relTime(r.ts)})`;
+      document.getElementById('em-distance').textContent = fmtDistance(r);
+      const hasSpoof = r.antispoof_score != null;
+      document.getElementById('em-spoof-dt').style.display = hasSpoof ? '' : 'none';
+      document.getElementById('em-spoof-dd').style.display = hasSpoof ? '' : 'none';
+      document.getElementById('em-spoof-dd').textContent = hasSpoof ? Number(r.antispoof_score).toFixed(2) : '';
+      document.getElementById('em-id').textContent = r.id;
+      document.getElementById('event-modal').classList.add('open');
+    }
+    function closeEventModal() {
+      document.getElementById('event-modal').classList.remove('open');
+    }
+    document.getElementById('events-body').addEventListener('click', (e) => {
+      const tr = e.target.closest('tr[data-idx]');
+      if (!tr) return;
+      const row = currentEvents[Number(tr.dataset.idx)];
+      if (row) openEventModal(row);
+    });
+    document.getElementById('em-close').onclick = closeEventModal;
+    document.getElementById('event-modal').addEventListener('click', (e) => {
+      if (e.target.id === 'event-modal') closeEventModal();   // click on backdrop only
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeEventModal();
+    });
+
     // Load once on page load. Reload the page to refresh stats/events.
     refreshStats();
     refreshEvents();
   </script>
-</body>
-</html>
+{% endblock %}

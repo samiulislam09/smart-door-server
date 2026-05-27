@@ -80,6 +80,16 @@ def test_is_spoof_passes_low_confidence_fake_when_threshold_raised():
     assert matching.is_spoof(False, 0.5, 0.9) is False
 
 
+def test_min_score_0_8_separates_observed_esp32_distribution():
+    # Real scores from the ESP32-CAM (see assets/snapshots): the live owner's blurry/dim
+    # frames were misclassified "fake" only with LOW confidence, while genuine phone-screen
+    # spoofs scored 0.94+. A 0.8 minimum lets the live face through and still blocks spoofs.
+    for live_false_reject in (0.481, 0.5, 0.517, 0.535, 0.622):
+        assert matching.is_spoof(False, live_false_reject, 0.8) is False
+    for real_spoof in (0.936, 0.97, 0.999, 1.0):
+        assert matching.is_spoof(False, real_spoof, 0.8) is True
+
+
 def test_is_spoof_never_blocks_real():
     assert matching.is_spoof(True, 0.99, 0.0) is False
 
@@ -87,3 +97,29 @@ def test_is_spoof_never_blocks_real():
 def test_is_spoof_safe_on_none():
     assert matching.is_spoof(None, None, 0.0) is False
     assert matching.is_spoof(False, None, 0.0) is False
+
+
+def test_is_low_light_below_threshold_is_dark():
+    assert matching.is_low_light(20.0, 45.0) is True
+
+
+def test_is_low_light_at_or_above_threshold_is_not_dark():
+    assert matching.is_low_light(45.0, 45.0) is False   # boundary: not strictly below
+    assert matching.is_low_light(100.0, 45.0) is False
+
+
+def test_next_led_state_stays_on_while_person_present():
+    assert matching.next_led_state(True, True, True) == "on"
+
+
+def test_next_led_state_off_when_doorway_empty():
+    assert matching.next_led_state(True, True, False) == "off"
+
+
+def test_next_led_state_off_in_daylight_led_was_off():
+    # LED was already off; next_led_state never turns it on (is_low_light does that probe)
+    assert matching.next_led_state(True, False, True) == "off"
+
+
+def test_next_led_state_off_when_flash_disabled():
+    assert matching.next_led_state(False, True, True) == "off"
