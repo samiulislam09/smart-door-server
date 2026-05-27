@@ -16,6 +16,7 @@ import pymysql
 import db          # loads .env (MYSQL_*, DASHBOARD_PASSWORD, SECRET_KEY) on import
 import dashboard
 import matching
+import notify
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY") or os.urandom(24)
@@ -38,6 +39,11 @@ MATCH_THRESHOLD = float(_env_threshold) if _env_threshold else None
 ANTISPOOF = os.environ.get("ANTISPOOF", "1").lower() not in ("0", "false", "no", "off", "")
 _env_minscore = os.environ.get("ANTISPOOF_MIN_SCORE")
 ANTISPOOF_MIN_SCORE = float(_env_minscore) if _env_minscore else 0.0
+# Effective default when the dashboard setting `antispoof_min_score` is unset. Defaults to
+# 0.8 (block only confident spoofs) — the low-res ESP32-CAM produces low-confidence "fake"
+# verdicts on genuine blurry/dim frames, so blocking on any fake (0.0) false-rejects real
+# people. An explicit ANTISPOOF_MIN_SCORE env still wins as the fallback.
+_ANTISPOOF_DEFAULT = ANTISPOOF_MIN_SCORE if _env_minscore else 0.8
 
 # Low-light flash LED. The ESP32-CAM's built-in GPIO 4 LED is lit when a frame is too dark
 # to recognize a face AND a person is present; the server tells the firmware via the
@@ -250,6 +256,7 @@ def _maybe_log(reason, distance, threshold, person, jpeg_bytes, antispoof_score=
     try:
         db.log_event(verdict, distance, threshold, person=person, jpeg_bytes=jpeg_bytes,
                      antispoof_score=antispoof_score)
+        notify.alert(verdict, person, distance, antispoof_score, jpeg_bytes)
         _log_count += 1
         if _log_count % 50 == 0:
             db.prune()
@@ -260,6 +267,26 @@ def _maybe_log(reason, distance, threshold, person, jpeg_bytes, antispoof_score=
 def _mean_brightness(img):
     """Mean luminance (0-255) of a PIL image — a cheap proxy for 'too dark to see a face'."""
     return ImageStat.Stat(img.convert("L")).mean[0]
+
+
+# Dashboard-editable settings are read from the DB on the /verify hot path (every ~1.5s),
+# so cache them briefly: a few-second TTL keeps MySQL off the critical path while letting
+# dashboard edits take effect within seconds and no server restart.
+_settings_cache = {"ts": 0.0, "data": {}}
+
+
+def _setting_float(name, default):
+    now = time.time()
+    if now - _settings_cache["ts"] > 5.0:
+        try:
+            _settings_cache["data"] = db.get_settings()
+        except Exception:
+            pass                       # keep the last good cache; never break the door
+        _settings_cache["ts"] = now
+    try:
+        return float(_settings_cache["data"].get(name))
+    except (TypeError, ValueError):
+        return default
 
 
 @app.route('/verify', methods=['POST'])
@@ -296,7 +323,8 @@ def verify():
             img.convert("RGB").save(tmp_path, format="JPEG", quality=95)
 
         is_real, antispoof_score = check_liveness(tmp_path)
-        if matching.is_spoof(is_real, antispoof_score, ANTISPOOF_MIN_SCORE):
+        min_score = _setting_float("antispoof_min_score", _ANTISPOOF_DEFAULT)
+        if matching.is_spoof(is_real, antispoof_score, min_score):
             _maybe_log("spoof", None, None, None, raw, antispoof_score=antispoof_score)
             # present=True: a spoof means a face IS in frame (just not live), so keep the
             # LED on for the next capture rather than dropping it as an empty doorway.

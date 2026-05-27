@@ -11,6 +11,7 @@ from flask import (Blueprint, request, session, redirect, url_for,
                    render_template, jsonify, send_from_directory, abort)
 
 import db
+import notify
 
 bp = Blueprint("dashboard", __name__)
 
@@ -58,6 +59,38 @@ def home():
 @login_required
 def users_page():
     return render_template("users.html", users=db.list_users())
+
+
+@bp.route("/dashboard/settings")
+@login_required
+def settings_page():
+    return render_template("settings.html", settings=db.get_settings())
+
+
+@bp.route("/settings", methods=["POST"])
+@login_required
+def settings_save():
+    form = request.form
+    updates = {
+        "telegram_chat_id": form.get("telegram_chat_id", "").strip(),
+        "alert_cooldown_s": form.get("alert_cooldown_s", "300").strip() or "300",
+        "alert_verdicts": ",".join(form.getlist("alert_verdicts")),
+        "alerts_enabled": "1" if form.get("alerts_enabled") else "0",
+        "antispoof_min_score": form.get("antispoof_min_score", "0.8").strip() or "0.8",
+    }
+    token = form.get("telegram_bot_token", "").strip()
+    if token:                                 # blank submission keeps the saved token
+        updates["telegram_bot_token"] = token
+    db.set_settings(updates)
+    return redirect(url_for("dashboard.settings_page", msg="Settings saved."))
+
+
+@bp.route("/settings/test", methods=["POST"])
+@login_required
+def settings_test():
+    s = db.get_settings()
+    ok, message = notify.send_test(s.get("telegram_bot_token", ""), s.get("telegram_chat_id", ""))
+    return redirect(url_for("dashboard.settings_page", msg=message))
 
 
 @bp.route("/api/events")

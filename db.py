@@ -83,6 +83,13 @@ CREATE TABLE IF NOT EXISTS user_photos (
 ) ENGINE=InnoDB
 """
 
+_DDL_SETTINGS = """
+CREATE TABLE IF NOT EXISTS settings (
+    name  VARCHAR(64) PRIMARY KEY,
+    value TEXT
+) ENGINE=InnoDB
+"""
+
 
 def init_db():
     """Create dirs and tables if missing, and migrate the events table."""
@@ -92,6 +99,7 @@ def init_db():
         cur.execute(_DDL)
         cur.execute(_DDL_USERS)
         cur.execute(_DDL_USER_PHOTOS)
+        cur.execute(_DDL_SETTINGS)
         _ensure_event_column(cur, "person", "VARCHAR(64) NULL")
         _ensure_event_column(cur, "antispoof_score", "DOUBLE NULL")
 
@@ -106,6 +114,26 @@ def _ensure_event_column(cur, name, coltype):
     )
     if cur.fetchone()["c"] == 0:
         cur.execute(f"ALTER TABLE events ADD COLUMN {name} {coltype}")
+
+
+def get_settings():
+    """Return all rows of the settings table as a {name: value} dict."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT name, value FROM settings")
+        return {r["name"]: r["value"] for r in cur.fetchall()}
+
+
+def set_settings(mapping):
+    """Upsert each {name: value} pair into the settings table."""
+    if not mapping:
+        return
+    with _connect() as conn, conn.cursor() as cur:
+        for name, value in mapping.items():
+            cur.execute(
+                "INSERT INTO settings (name, value) VALUES (%s, %s) "
+                "ON DUPLICATE KEY UPDATE value=VALUES(value)",
+                (name, value),
+            )
 
 
 def log_event(verdict, distance, threshold, person=None, jpeg_bytes=None,

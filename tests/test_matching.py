@@ -80,6 +80,16 @@ def test_is_spoof_passes_low_confidence_fake_when_threshold_raised():
     assert matching.is_spoof(False, 0.5, 0.9) is False
 
 
+def test_min_score_0_8_separates_observed_esp32_distribution():
+    # Real scores from the ESP32-CAM (see assets/snapshots): the live owner's blurry/dim
+    # frames were misclassified "fake" only with LOW confidence, while genuine phone-screen
+    # spoofs scored 0.94+. A 0.8 minimum lets the live face through and still blocks spoofs.
+    for live_false_reject in (0.481, 0.5, 0.517, 0.535, 0.622):
+        assert matching.is_spoof(False, live_false_reject, 0.8) is False
+    for real_spoof in (0.936, 0.97, 0.999, 1.0):
+        assert matching.is_spoof(False, real_spoof, 0.8) is True
+
+
 def test_is_spoof_never_blocks_real():
     assert matching.is_spoof(True, 0.99, 0.0) is False
 

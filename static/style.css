@@ -257,3 +257,28 @@ span.user-avatar { background: var(--panel-2); font-size: 16px; }
 @media (prefers-reduced-motion: reduce) {
   .hero, .hero-ring { animation: none; }
 }
+
+/* ---- settings ---- */
+.settings-card { max-width: 520px; }
+.settings-form { display: flex; flex-direction: column; gap: 14px; }
+.settings-form > label { display: flex; flex-direction: column; gap: 6px;
+  font-size: 13px; color: var(--muted); }
+.settings-form input[type=text], .settings-form input[type=password],
+.settings-form input[type=number] {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 9px 12px; font-size: 14px; }
+.settings-form .verdicts {
+  border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+  display: flex; gap: 18px; flex-wrap: wrap; margin: 0; }
+.settings-form .verdicts legend { color: var(--muted); font-size: 12px; padding: 0 4px; }
+.settings-form label.chk { flex-direction: row; align-items: center; gap: 8px; color: var(--text); }
+.settings-section { margin-top: 6px; padding-top: 14px; border-top: 1px solid var(--border);
+  font-weight: 600; color: var(--text); }
+.field-help { color: var(--muted); font-size: 12px; line-height: 1.4; font-weight: 400; }
+.btn-save { align-self: flex-start; background: var(--accent); color: #fff; border: none;
+  border-radius: 8px; padding: 9px 18px; font-size: 14px; font-weight: 600; cursor: pointer; }
+.btn-save:hover { filter: brightness(1.1); }
+.settings-test { margin-top: 14px; }
+.btn-test { background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 9px 16px; font-size: 14px; cursor: pointer; }
+.btn-test:hover { filter: brightness(1.15); }

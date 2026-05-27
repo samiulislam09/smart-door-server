@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+  <main class="wrap">
+    <section class="card settings-card">
+      <div class="card-title">Telegram alerts</div>
+      <form class="settings-form" method="post" action="{{ url_for('dashboard.settings_save') }}">
+        <label>Bot token
+          <input type="password" name="telegram_bot_token" autocomplete="off"
+                 placeholder="{{ 'saved ✓ — leave blank to keep' if settings.get('telegram_bot_token') else 'paste token from @BotFather' }}">
+        </label>
+        <label>Chat ID
+          <input type="text" name="telegram_chat_id" placeholder="e.g. 123456789"
+                 value="{{ settings.get('telegram_chat_id', '') }}">
+        </label>
+        <label>Cooldown (seconds)
+          <input type="number" name="alert_cooldown_s" min="0"
+                 value="{{ settings.get('alert_cooldown_s', '300') }}">
+        </label>
+        {% set sel = (settings.get('alert_verdicts', 'spoof,denied')).split(',') %}
+        <fieldset class="verdicts">
+          <legend>Alert on</legend>
+          <label class="chk"><input type="checkbox" name="alert_verdicts" value="spoof" {{ 'checked' if 'spoof' in sel else '' }}> Spoof</label>
+          <label class="chk"><input type="checkbox" name="alert_verdicts" value="denied" {{ 'checked' if 'denied' in sel else '' }}> Denied</label>
+          <label class="chk"><input type="checkbox" name="alert_verdicts" value="granted" {{ 'checked' if 'granted' in sel else '' }}> Granted</label>
+        </fieldset>
+        <label class="chk">
+          <input type="checkbox" name="alerts_enabled" value="1" {{ 'checked' if settings.get('alerts_enabled') == '1' else '' }}> Enable alerts
+        </label>
+
+        <div class="settings-section">Anti-spoofing</div>
+        <label>Minimum spoof confidence (0–1)
+          <input type="number" name="antispoof_min_score" min="0" max="1" step="0.05"
+                 value="{{ settings.get('antispoof_min_score', '0.8') }}">
+          <span class="field-help">Only block a face as a spoof when the model is at least this
+            confident. Higher = fewer false rejects of real faces. 0.8 suits the low-res camera;
+            lower it toward 0 to be stricter.</span>
+        </label>
+        <button class="btn-save" type="submit">Save</button>
+      </form>
+      <form class="settings-test" method="post" action="{{ url_for('dashboard.settings_test') }}">
+        <button class="btn-test" type="submit">Send test message</button>
+      </form>
+    </section>
+  </main>
+{% endblock %}
