@@ -1,3 +1,5 @@
-.env
 assets/users/
 assets/snapshots/
+.gitignore
+node_modules
+.env
