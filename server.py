@@ -10,7 +10,7 @@ from deepface import DeepFace
 import io, tempfile, time, threading, urllib.request
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageStat
 import pymysql
 
 import db          # loads .env (MYSQL_*, DASHBOARD_PASSWORD, SECRET_KEY) on import
@@ -38,6 +38,13 @@ MATCH_THRESHOLD = float(_env_threshold) if _env_threshold else None
 ANTISPOOF = os.environ.get("ANTISPOOF", "1").lower() not in ("0", "false", "no", "off", "")
 _env_minscore = os.environ.get("ANTISPOOF_MIN_SCORE")
 ANTISPOOF_MIN_SCORE = float(_env_minscore) if _env_minscore else 0.0
+
+# Low-light flash LED. The ESP32-CAM's built-in GPIO 4 LED is lit when a frame is too dark
+# to recognize a face AND a person is present; the server tells the firmware via the
+# response "led" field. FLASH_LED toggles the feature; LOW_LIGHT_THRESHOLD is the mean
+# luminance (0-255) below which a frame counts as "dark".
+FLASH_LED = os.environ.get("FLASH_LED", "1").lower() not in ("0", "false", "no", "off", "")
+LOW_LIGHT_THRESHOLD = float(os.environ.get("LOW_LIGHT_THRESHOLD", "45"))
 
 # Enrolled faces are cached at startup so each /verify only embeds the incoming frame.
 # _OWNERS is a list of (user_name, embedding_np); the closest one within _THRESHOLD wins.
@@ -217,6 +224,9 @@ def _seed_owner_if_empty():
 
 
 # Debounced, face-only event logging (the hot path posts ~every 1.5s, mostly no_face).
+# Only the verdicts in _VERDICT_MAP are logged; no_face, error, and low_light are skipped
+# (low_light short-circuits before _maybe_log is ever called, and would otherwise flood
+# the table on a dark doorway).
 _VERDICT_MAP = {"match": "granted", "no_match": "denied", "spoof": "spoof"}
 LOG_DEBOUNCE_S = 10.0
 _last_log = {"key": None, "ts": 0.0}
@@ -247,6 +257,11 @@ def _maybe_log(reason, distance, threshold, person, jpeg_bytes, antispoof_score=
         print("[log] failed (door unaffected):", ex)
 
 
+def _mean_brightness(img):
+    """Mean luminance (0-255) of a PIL image — a cheap proxy for 'too dark to see a face'."""
+    return ImageStat.Stat(img.convert("L")).mean[0]
+
+
 @app.route('/verify', methods=['POST'])
 def verify():
     # Validate the body is a real image; a bad/empty body is a client error, not a
@@ -257,7 +272,15 @@ def verify():
         img.load()
     except Exception as e:
         return jsonify({"verified": False, "reason": "error",
-                        "error": f"cannot read image: {e}"})
+                        "error": f"cannot read image: {e}", "led": "off"})
+
+    # Read the firmware's current LED state and short-circuit a too-dark frame: tell the
+    # ESP32 to light up and re-capture, skipping the expensive embed/liveness on a frame
+    # that would only yield no_face. Presence is confirmed on the next (lit) frame.
+    led_in = request.headers.get("X-LED-State", "off").strip().lower() == "on"
+    if FLASH_LED and not led_in and matching.is_low_light(
+            _mean_brightness(img), LOW_LIGHT_THRESHOLD):
+        return jsonify({"verified": False, "reason": "low_light", "led": "on"})
 
     tmp_path = None
     try:
@@ -275,21 +298,27 @@ def verify():
         is_real, antispoof_score = check_liveness(tmp_path)
         if matching.is_spoof(is_real, antispoof_score, ANTISPOOF_MIN_SCORE):
             _maybe_log("spoof", None, None, None, raw, antispoof_score=antispoof_score)
-            return jsonify({"verified": False, "reason": "spoof"})
+            # present=True: a spoof means a face IS in frame (just not live), so keep the
+            # LED on for the next capture rather than dropping it as an empty doorway.
+            return jsonify({"verified": False, "reason": "spoof",
+                            "led": matching.next_led_state(FLASH_LED, led_in, True)})
 
         reason, distance, threshold, person = match_face(tmp_path)
         _maybe_log(reason, distance, threshold, person, raw)
 
+        present = reason in ("match", "no_match")          # a person is in frame
+        led_out = matching.next_led_state(FLASH_LED, led_in, present)
+
         if reason in ("match", "no_match"):
             body = {"verified": reason == "match", "reason": reason,
-                    "distance": distance, "threshold": threshold}
+                    "distance": distance, "threshold": threshold, "led": led_out}
             if person:                       # string field; never a second boolean true
                 body["user"] = person
             return jsonify(body)
         if reason == "no_face":
-            return jsonify({"verified": False, "reason": "no_face"})
+            return jsonify({"verified": False, "reason": "no_face", "led": led_out})
         return jsonify({"verified": False, "reason": "error",
-                        "error": "verification failed"})
+                        "error": "verification failed", "led": "off"})
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)

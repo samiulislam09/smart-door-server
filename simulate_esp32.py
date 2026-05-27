@@ -19,10 +19,11 @@ import urllib.request
 DEFAULT_URL = os.environ.get("VERIFY_URL", "http://127.0.0.1:8080/verify")
 
 
-def post_image(url, data):
+def post_image(url, data, led_state="off"):
     req = urllib.request.Request(
         url, data=data, method="POST",
-        headers={"Content-Type": "application/octet-stream"},
+        headers={"Content-Type": "application/octet-stream",
+                 "X-LED-State": led_state},
     )
     with urllib.request.urlopen(req, timeout=60) as resp:
         return json.loads(resp.read().decode())
@@ -46,13 +47,24 @@ def blank_image_bytes():
     return buf.getvalue()
 
 
-def run_case(name, data, url):
+def dark_image_bytes():
+    """A near-black 640x480 JPEG: a valid image too dark to detect a face."""
+    from PIL import Image
+    img = Image.new("RGB", (640, 480), (5, 5, 5))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+def run_case(name, data, url, led_state="off"):
     try:
-        resp = post_image(url, data)
+        resp = post_image(url, data, led_state)
     except Exception as e:
         print(f"[{name}] request FAILED: {e}")
         return
-    print(f"[{name}] response={json.dumps(resp)}  ->  door action: {door_action(resp)}")
+    led = resp.get("led", "-")
+    print(f"[{name}] response={json.dumps(resp)}  ->  door action: {door_action(resp)}"
+          f"  |  LED: {led}")
 
 
 def main():
@@ -79,6 +91,9 @@ def main():
             run_case("stranger (expect BUZZER)", f.read(), args.url)
     else:
         print("[stranger (expect BUZZER)] skipped - pass --stranger <path> to test a non-enrolled face")
+
+    run_case("dark frame (LED off, expect low_light -> LED on)",
+             dark_image_bytes(), args.url, led_state="off")
 
     run_case("no-face  (expect IDLE)  ", blank_image_bytes(), args.url)
 

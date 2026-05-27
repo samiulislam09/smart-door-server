@@ -51,7 +51,13 @@ def logout():
 @bp.route("/dashboard")
 @login_required
 def home():
-    return render_template("dashboard.html", users=db.list_users())
+    return render_template("dashboard.html")
+
+
+@bp.route("/dashboard/users")
+@login_required
+def users_page():
+    return render_template("users.html", users=db.list_users())
 
 
 @bp.route("/api/events")
@@ -98,9 +104,9 @@ def users_create():
     import server
     file = request.files.get("photo")
     if not file:
-        return redirect(url_for("dashboard.home", msg="No file selected"))
+        return redirect(url_for("dashboard.users_page", msg="No file selected"))
     ok, message = server.enroll_user(request.form.get("name", ""), file.read())
-    return redirect(url_for("dashboard.home", msg=message))
+    return redirect(url_for("dashboard.users_page", msg=message))
 
 
 @bp.route("/users/<int:uid>/photos", methods=["POST"])
@@ -109,9 +115,9 @@ def users_add_photo(uid):
     import server
     file = request.files.get("photo")
     if not file:
-        return redirect(url_for("dashboard.home", msg="No file selected"))
+        return redirect(url_for("dashboard.users_page", msg="No file selected"))
     ok, message = server.add_user_photo(uid, file.read())
-    return redirect(url_for("dashboard.home", msg=message))
+    return redirect(url_for("dashboard.users_page", msg=message))
 
 
 @bp.route("/users/<int:uid>/delete", methods=["POST"])
@@ -120,7 +126,7 @@ def users_delete(uid):
     import server
     db.delete_user(uid)
     server.init_owners()
-    return redirect(url_for("dashboard.home", msg="User removed."))
+    return redirect(url_for("dashboard.users_page", msg="User removed."))
 
 
 @bp.route("/photos/<int:pid>/delete", methods=["POST"])
@@ -129,4 +135,4 @@ def photo_delete(pid):
     import server
     db.delete_photo(pid)
     server.init_owners()
-    return redirect(url_for("dashboard.home", msg="Photo removed."))
+    return redirect(url_for("dashboard.users_page", msg="Photo removed."))

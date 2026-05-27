@@ -62,3 +62,21 @@ def is_spoof(is_real, score, min_score):
     least `min_score` confident. min_score=0.0 trusts the model's decision; raising it blocks
     only confident spoofs (fewer false-rejects of real people). Safe on None inputs."""
     return (is_real is False) and (score is not None) and (score >= min_score)
+
+
+def is_low_light(brightness, threshold):
+    """True when a frame's mean luminance (0-255) is below `threshold` — too dark to
+    reliably detect a face, so the camera flash LED should be turned on to probe."""
+    return brightness < threshold
+
+
+def next_led_state(flash_enabled, led_currently_on, person_present):
+    """Desired LED state ('on'/'off') for the next capture, AFTER recognition ran.
+
+    Steady-while-present: the LED stays on only when it is already lit AND a person is
+    present; it turns off on an empty (but lit) doorway, in daylight (LED was never on),
+    and whenever the flash feature is disabled. The dark-frame probe (off -> on) is decided
+    separately via is_low_light, because presence is unknown until the frame is lit."""
+    if flash_enabled and led_currently_on and person_present:
+        return "on"
+    return "off"

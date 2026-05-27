@@ -278,7 +278,7 @@ def stats(days=7):
         series = cur.fetchall()
 
     # Build dense per-day labels so the chart has no gaps.
-    labels, granted, denied = [], [], []
+    labels, granted, denied, spoof = [], [], [], []
     by_day = {}
     for row in series:
         by_day.setdefault(str(row["d"]), {})[row["verdict"]] = row["c"]
@@ -287,13 +287,14 @@ def stats(days=7):
         labels.append(day)
         granted.append(by_day.get(day, {}).get("granted", 0))
         denied.append(by_day.get(day, {}).get("denied", 0))
+        spoof.append(by_day.get(day, {}).get("spoof", 0))
 
     return {
         "granted_today": today_counts.get("granted", 0),
         "denied_today": today_counts.get("denied", 0),
         "spoof_today": today_counts.get("spoof", 0),
         "last_seen": last_seen,
-        "series": {"labels": labels, "granted": granted, "denied": denied},
+        "series": {"labels": labels, "granted": granted, "denied": denied, "spoof": spoof},
     }
 
 
